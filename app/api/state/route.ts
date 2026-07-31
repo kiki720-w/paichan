@@ -1,0 +1,5 @@
+import {env} from 'cloudflare:workers';
+const seed='{}';
+async function ensure(){await env.DB.prepare(`CREATE TABLE IF NOT EXISTS app_state (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`).run()}
+export async function GET(){try{await ensure();const row=await env.DB.prepare('SELECT data FROM app_state WHERE id=1').first<{data:string}>();return Response.json({state:row?JSON.parse(row.data):null})}catch(e){return Response.json({error:String(e),state:null},{status:500})}}
+export async function PUT(req:Request){try{await ensure();const state=await req.json();await env.DB.prepare(`INSERT INTO app_state(id,data,updated_at) VALUES(1,?,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET data=excluded.data,updated_at=CURRENT_TIMESTAMP`).bind(JSON.stringify(state||seed)).run();return Response.json({ok:true})}catch(e){return Response.json({error:String(e)},{status:500})}}

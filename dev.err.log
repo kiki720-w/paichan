@@ -1,0 +1,14 @@
+[2mDefault inspector port 9229 not available, using 9230 instead
+[22m
+[2m11:32:00[22m [31m[1m[vite][22m[39m [31mInternal server error: fetch failed[39m
+      at Object.processResponse (C:\Users\33929\Documents\机械\车间排产软件\node_modules\.pnpm\undici@7.24.8\node_modules\undici\lib\web\fetch\index.js:237:16)
+      at C:\Users\33929\Documents\机械\车间排产软件\node_modules\.pnpm\undici@7.24.8\node_modules\undici\lib\web\fetch\index.js:1081:19
+      at C:\Users\33929\Documents\机械\车间排产软件\node_modules\.pnpm\undici@7.24.8\node_modules\undici\index.js:157:7
+      at async fetch5 (C:\Users\33929\Documents\机械\车间排产软件\node_modules\.pnpm\miniflare@4.20260515.0\node_modules\miniflare\dist\src\index.js:59000:20)
+      at async _Miniflare.dispatchFetch (C:\Users\33929\Documents\机械\车间排产软件\node_modules\.pnpm\miniflare@4.20260515.0\node_modules\miniflare\dist\src\index.js:89442:22)
+      at async file:///C:/Users/33929/Documents/%E6%9C%BA%E6%A2%B0/%E8%BD%A6%E9%97%B4%E6%8E%92%E4%BA%A7%E8%BD%AF%E4%BB%B6/node_modules/.pnpm/@cloudflare+vite-plugin@1.3_9efc67d86936c2d7a6e5651c2e20f2b4/node_modules/@cloudflare/vite-plugin/dist/index.mjs:34226:19
+[2m11:32:01[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [2m[console.error] [22m[vinext] RSC HMR error: Error: Connection closed.
+    at close (http://localhost:3001/node_modules/.vite/deps/react-server-dom-webpack_client__browser.js?v=c8e6605d:2364:36)
+    at progress (http://localhost:3001/node_modules/.vite/deps/react-server-dom-webpack_client__browser.js?v=c8e6605d:2437:28)
+[2m11:36:19[22m [31m[1m[vite][22m[39m EPERM: operation not permitted, rmdir 'C:\Users\33929\Documents\机械\车间排产软件\node_modules\.vite\deps_rsc'
+[2m11:36:19[22m [31m[1m[vite][22m[39m server restart failed
