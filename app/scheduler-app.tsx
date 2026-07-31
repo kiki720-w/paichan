@@ -5,7 +5,7 @@ import * as XLSX from 'xlsx';
 type Worker={id:string;name:string;team:string;capacity:number;overtime:number;skills:string[];active:boolean};
 type Part={id:string,code:string,name:string,category:string,unit:number,workers:string[]};
 type Order={id:string,orderNo:string,customer:string,partCode:string,name:string,qty:number,done:number,due:string,priority:number,status:string};
-type Allocation={date:string,worker:string,orderNo:string,partCode:string,name:string,amount:number,capacity:number,due:string,status:string};
+type Allocation={date:string,worker:string,orderNo:string,partCode:string,name:string,amount:number,capacity:number,due:string,status:string,reason?:string,candidates?:string[]};
 type ImportIssue={key:string,partCode:string,name:string,reason:string};
 type AppState={workers:Worker[],parts:Part[],orders:Order[],allocations:Allocation[],lastRun:string,issues?:ImportIssue[],importedAt?:string};
 
@@ -51,7 +51,7 @@ function schedule(state:AppState,useOvertime=false){
   const candidates=matchingWorkers(part,state.workers); if(!candidates.length)continue;
   let best:{w:Worker,finish:string,plan:{date:string,amount:number}[]}|null=null;
   for(const w of candidates){let remain=Math.max(0,order.qty-order.done)*part.unit,d=workday(today()),guard=0;const plan=[] as {date:string,amount:number}[];while(remain>.001&&guard++<400){const cap=useOvertime?w.overtime:w.capacity,k=w.id+'|'+d,avail=Math.max(0,cap-(loads.get(k)||0));if(avail){const amount=Math.min(avail,remain);plan.push({date:d,amount});remain-=amount}if(remain>.001)d=workday(addDay(d))}if(!best||d<best.finish)best={w,finish:d,plan}}
-  if(!best)continue;for(const p of best.plan){const cap=useOvertime?best.w.overtime:best.w.capacity,k=best.w.id+'|'+p.date;loads.set(k,(loads.get(k)||0)+p.amount);out.push({date:p.date,worker:best.w.name,orderNo:order.orderNo,partCode:order.partCode,name:order.name,amount:p.amount,capacity:cap,due:order.due,status:p.date<=order.due?'按期':'延期'})}
+  if(!best)continue;const candidateNames=candidates.map(w=>w.name),matchBasis=part.workers.length?'工件指定人员':'按加工类别匹配',selection=candidates.length===1?'唯一可加工人员':'候选人中预计最早完成';for(const p of best.plan){const cap=useOvertime?best.w.overtime:best.w.capacity,k=best.w.id+'|'+p.date;loads.set(k,(loads.get(k)||0)+p.amount);out.push({date:p.date,worker:best.w.name,orderNo:order.orderNo,partCode:order.partCode,name:order.name,amount:p.amount,capacity:cap,due:order.due,status:p.date<=order.due?'按期':'延期',reason:`${matchBasis}；${selection}`,candidates:candidateNames})}
  }
  return out.sort((a,b)=>a.date.localeCompare(b.date)||a.worker.localeCompare(b.worker));
 }
@@ -136,12 +136,12 @@ function Metric({label,value,note,danger=false}:{label:string,value:string|numbe
 function Form({title,onSubmit,children}:{title:string,onSubmit:(e:React.FormEvent)=>void,children:React.ReactNode}){return <form className="form-panel" onSubmit={onSubmit}><small>主动录入</small><h3>{title}</h3>{children}<button className="primary" type="submit">保存资料</button></form>}
 function GroupedSchedule({rows}:{rows:Allocation[]}){
  const workers=[...new Set(rows.map(r=>r.worker))];
- return <div style={{display:'grid',gap:10}}>{workers.map((worker,wi)=>{const workerRows=rows.filter(r=>r.worker===worker),dates=[...new Set(workerRows.map(r=>r.date))];return <details key={worker} open={wi===0} style={{border:'1px solid #dfe7e1',borderRadius:12,background:'#fbfcfa',overflow:'hidden'}}>
-  <summary style={{cursor:'pointer',padding:'15px 18px',fontWeight:800,color:'#173b2d'}}>{worker}<span style={{marginLeft:12,color:'#718078',fontSize:11,fontWeight:600}}>{dates.length}个工作日 · {workerRows.length}项安排</span></summary>
+ return <div style={{display:'grid',gap:10}}>{workers.map((worker,wi)=>{const workerRows=rows.filter(r=>r.worker===worker),dates=[...new Set(workerRows.map(r=>r.date))],total=workerRows.reduce((s,r)=>s+r.amount,0),lastDate=dates[dates.length-1];return <details key={worker} open={wi===0} style={{border:'1px solid #dfe7e1',borderRadius:12,background:'#fbfcfa',overflow:'hidden'}}>
+  <summary style={{cursor:'pointer',padding:'15px 18px',fontWeight:800,color:'#173b2d'}}>{worker}<span style={{marginLeft:12,color:'#718078',fontSize:11,fontWeight:600}}>{dates.length}个工作日 · {workerRows.length}项安排 · 总工作量{total.toFixed(1)} · 排至{lastDate}</span></summary>
   <div style={{padding:'0 12px 12px',display:'grid',gap:8}}>{dates.map(date=>{const dayRows=workerRows.filter(r=>r.date===date),total=dayRows.reduce((s,r)=>s+r.amount,0),capacity=dayRows[0]?.capacity||0;return <details key={date} style={{background:'#fff',border:'1px solid #e7ece8',borderRadius:9}}>
    <summary style={{cursor:'pointer',padding:'11px 14px',fontWeight:700}}>{date}<span style={{marginLeft:12,color:'#718078',fontSize:11}}>工作量 {total.toFixed(1)} / {capacity.toFixed(1)} · {Math.round(total/Math.max(1,capacity)*100)}%</span></summary>
    <ScheduleTable rows={dayRows}/>
   </details>})}</div>
  </details>})}</div>
 }
-function ScheduleTable({rows}:{rows:Allocation[]}){return <div className="table-wrap"><table><thead><tr><th>加工日期</th><th>人员</th><th>订单号</th><th>物料编码</th><th>工件</th><th>当天安排量</th><th>负荷</th><th>订单交期</th><th>结果</th></tr></thead><tbody>{rows.map((a,i)=><tr key={i}><td><b>{a.date}</b></td><td>{a.worker}</td><td className="mono">{a.orderNo}</td><td className="mono">{a.partCode}</td><td>{a.name}</td><td>{a.amount.toFixed(1)}</td><td><div className="bar"><i style={{width:`${Math.min(100,a.amount/a.capacity*100)}%`}}/></div></td><td>{a.due}</td><td><span className={a.status==='按期'?'ok':'late'}>{a.status}</span></td></tr>)}</tbody></table></div>}
+function ScheduleTable({rows}:{rows:Allocation[]}){return <div className="table-wrap"><table><thead><tr><th>加工日期</th><th>人员</th><th>订单号</th><th>物料编码</th><th>工件</th><th>当天安排量</th><th>负荷</th><th>分配依据</th><th>候选人员</th><th>订单交期</th><th>结果</th></tr></thead><tbody>{rows.map((a,i)=><tr key={i}><td><b>{a.date}</b></td><td>{a.worker}</td><td className="mono">{a.orderNo}</td><td className="mono">{a.partCode}</td><td>{a.name}</td><td>{a.amount.toFixed(1)}</td><td><div className="bar"><i style={{width:`${Math.min(100,a.amount/a.capacity*100)}%`}}/></div></td><td>{a.reason||'历史排产结果'}</td><td>{a.candidates?.join('、')||a.worker}</td><td>{a.due}</td><td><span className={a.status==='按期'?'ok':'late'}>{a.status}</span></td></tr>)}</tbody></table></div>}
