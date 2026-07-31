@@ -97,7 +97,9 @@ export default function SchedulerApp(){
     imported.push({id,orderNo,customer,partCode:code,name,qty,done:Number(row['已完成数量'])||0,due,priority:Number(row['优先级'])||3,status:'待排'});
     const reasons=[];if(!due)reasons.push('缺少交期');if(!qty)reasons.push('数量无效');if(!part.unit)reasons.push('缺少单件定额');if(!part.workers.length)reasons.push('无匹配人员');if(reasons.length)issues.push({key:id,partCode:code,name,reason:reasons.join('、')});
    });
-   const incomingIds=new Set(imported.map(o=>o.id));const orders=[...data.orders.filter(o=>!o.id.startsWith('mes-order-')||!incomingIds.has(o.id)),...imported];
+   // A complete weekly MES workbook is a snapshot: replace every previous
+   // MES/example import, while preserving manual and TEST orders.
+   const orders=[...data.orders.filter(o=>!o.orderNo.toUpperCase().startsWith('MES-')),...imported];
    await persist({...data,workers,parts:[...partMap.values()],orders,allocations:[],issues,importedAt:new Date().toLocaleString('zh-CN')},`MES周数据已更新：${imported.length} 项任务，${issues.length} 项待确认`);return;
   }
   const rows=XLSX.utils.sheet_to_json<Record<string,unknown>>(book.Sheets[book.SheetNames[0]],{defval:''}),byKey=new Map(data.orders.map(o=>[`${o.orderNo}|${o.partCode}`,o]));
