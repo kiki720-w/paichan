@@ -134,12 +134,12 @@ export default function SchedulerApp(){
    <section className="panel">
     <div className="panel-title"><div><small>订单池</small><h3>MES订单与临时插单</h3>{data.importedAt&&<small>最近一次周数据更新：{data.importedAt}</small>}</div>{data.issues?.length?<span className="late">{data.issues.length} 项待确认</span>:null}</div>
     {data.issues?.length?<div className="import-issues"><b>导入异常</b><span>{data.issues.slice(0,4).map(x=>`${x.partCode} ${x.reason}`).join('；')}{data.issues.length>4?'……':''}</span></div>:null}
-    {resolving&&<form onSubmit={saveResolution} style={{background:'#f6f9f5',border:'1px solid #cfdcd3',borderRadius:12,padding:16,marginBottom:16,display:'grid',gap:12}}>
+    {resolving&&<div role="dialog" aria-modal="true" style={{position:'fixed',inset:0,background:'#10261dcc',zIndex:30,display:'grid',placeItems:'center',padding:20}} onMouseDown={e=>{if(e.target===e.currentTarget)setResolving(null)}}><form onSubmit={saveResolution} style={{background:'#fff',border:'1px solid #cfdcd3',borderRadius:16,padding:24,display:'grid',gap:16,width:'min(680px,96vw)',maxHeight:'88vh',overflow:'auto',boxShadow:'0 24px 70px #0005'}}>
      <div><b>补充资料：{resolving.partCode} · {resolving.name}</b><div style={{fontSize:11,color:'#718078',marginTop:4}}>保存后将自动移出待确认并重新排产。</div></div>
      <div className="row"><input type="number" step="0.1" placeholder="单件工作量" value={resolveForm.unit} onChange={e=>setResolveForm({...resolveForm,unit:e.target.value})}/><input placeholder="加工类别" value={resolveForm.category} onChange={e=>setResolveForm({...resolveForm,category:e.target.value})}/></div>
      <div><label style={{fontSize:12,fontWeight:700}}>可加工人员</label><div className="checks" style={{marginTop:8}}>{data.workers.filter(w=>w.active).map(w=><label key={w.id}><input type="checkbox" checked={resolveForm.workers.includes(w.id)} onChange={e=>setResolveForm({...resolveForm,workers:e.target.checked?[...resolveForm.workers,w.id]:resolveForm.workers.filter(id=>id!==w.id)})}/>{w.name}</label>)}</div></div>
      <div style={{display:'flex',gap:8}}><button type="submit" className="primary">保存、确认并重排</button><button type="button" className="import" onClick={()=>setResolving(null)}>取消</button></div>
-    </form>}
+    </form></div>}
     <table><thead><tr><th>优先级</th><th>订单号</th><th>客户</th><th>工件</th><th>数量</th><th>已完成</th><th>交期</th><th>状态</th><th>操作</th></tr></thead>
      <tbody>{data.orders.map(o=>{const issue=data.issues?.some(x=>x.key===o.id);return <tr key={o.id}><td><span className={`priority p${o.priority}`}>{o.priority}</span></td><td className="mono">{o.orderNo}</td><td>{o.customer}</td><td>{o.name}</td><td>{o.qty}</td><td>{o.done}</td><td>{o.due}</td><td>{issue?<span className="late">待确认</span>:<span className="pending">{o.status}</span>}</td><td><button className={issue?'late':'ok'} style={{border:0,cursor:'pointer'}} onClick={()=>issue?startResolve(o):confirmOrder(o)}>{issue?'补充并确认':'确认并重排'}</button></td></tr>})}</tbody>
     </table>
