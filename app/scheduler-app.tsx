@@ -25,8 +25,9 @@ const initial:AppState={workers:[
  {id:'o3',orderNo:'MES-260731-03',customer:'格里森',partCode:'B02004878',name:'上拉杆',qty:10,done:2,due:'2026-08-12',priority:3,status:'待排'},
 ],allocations:[],lastRun:''};
 
-const today=()=>new Date().toISOString().slice(0,10);
-const addDay=(s:string,n=1)=>{const d=new Date(s+'T00:00:00');d.setDate(d.getDate()+n);return d.toISOString().slice(0,10)};
+const formatLocalDate=(d:Date)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+const today=()=>formatLocalDate(new Date());
+const addDay=(s:string,n=1)=>{const [year,month,day]=s.split('-').map(Number);const d=new Date(year,month-1,day);d.setDate(d.getDate()+n);return formatLocalDate(d)};
 const workday=(s:string)=>{let x=s;while([0,6].includes(new Date(x+'T00:00:00').getDay()))x=addDay(x);return x};
 
 function schedule(state:AppState,useOvertime=false){
@@ -34,7 +35,11 @@ function schedule(state:AppState,useOvertime=false){
  const orders=[...state.orders].filter(o=>o.status!=='已完成').sort((a,b)=>a.priority-b.priority||a.due.localeCompare(b.due));
  for(const order of orders){
   const part=state.parts.find(p=>p.code===order.partCode); if(!part||part.unit<=0)continue;
-  const candidates=state.workers.filter(w=>w.active&&(part.workers.includes(w.id)||w.skills.some(s=>part.category.includes(s)||s.includes(part.category)))); if(!candidates.length)continue;
+  // Explicitly selected workers are a hard constraint. Category skills are
+  // only a fallback for legacy parts that have no selected workers.
+  const candidates=state.workers.filter(w=>w.active&&(part.workers.length
+   ?part.workers.includes(w.id)
+   :w.skills.some(s=>part.category.includes(s)||s.includes(part.category)))); if(!candidates.length)continue;
   let best:{w:Worker,finish:string,plan:{date:string,amount:number}[]}|null=null;
   for(const w of candidates){let remain=Math.max(0,order.qty-order.done)*part.unit,d=workday(today()),guard=0;const plan=[] as {date:string,amount:number}[];while(remain>.001&&guard++<400){const cap=useOvertime?w.overtime:w.capacity,k=w.id+'|'+d,avail=Math.max(0,cap-(loads.get(k)||0));if(avail){const amount=Math.min(avail,remain);plan.push({date:d,amount});remain-=amount}if(remain>.001)d=workday(addDay(d))}if(!best||d<best.finish)best={w,finish:d,plan}}
   if(!best)continue;for(const p of best.plan){const cap=useOvertime?best.w.overtime:best.w.capacity,k=best.w.id+'|'+p.date;loads.set(k,(loads.get(k)||0)+p.amount);out.push({date:p.date,worker:best.w.name,orderNo:order.orderNo,partCode:order.partCode,name:order.name,amount:p.amount,capacity:cap,due:order.due,status:p.date<=order.due?'按期':'延期'})}
