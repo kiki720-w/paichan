@@ -37,6 +37,9 @@ const excelDate=(value:unknown)=>{
 };
 const numberFrom=(value:unknown)=>{const match=clean(value).match(/\d+(?:\.\d+)?/);return match?Number(match[0]):0};
 const stableId=(...values:unknown[])=>'mes-'+values.map(v=>clean(v).toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g,'-')).join('|');
+const matchingWorkers=(part:Part,workers:Worker[])=>workers.filter(w=>w.active&&(part.workers.length
+ ?part.workers.includes(w.id)
+ :w.skills.some(s=>part.category.includes(s)||s.includes(part.category))));
 
 function schedule(state:AppState,useOvertime=false){
  const loads=new Map<string,number>(),out:Allocation[]=[];
@@ -45,9 +48,7 @@ function schedule(state:AppState,useOvertime=false){
   const part=state.parts.find(p=>p.code===order.partCode); if(!part||part.unit<=0)continue;
   // Explicitly selected workers are a hard constraint. Category skills are
   // only a fallback for legacy parts that have no selected workers.
-  const candidates=state.workers.filter(w=>w.active&&(part.workers.length
-   ?part.workers.includes(w.id)
-   :w.skills.some(s=>part.category.includes(s)||s.includes(part.category)))); if(!candidates.length)continue;
+  const candidates=matchingWorkers(part,state.workers); if(!candidates.length)continue;
   let best:{w:Worker,finish:string,plan:{date:string,amount:number}[]}|null=null;
   for(const w of candidates){let remain=Math.max(0,order.qty-order.done)*part.unit,d=workday(today()),guard=0;const plan=[] as {date:string,amount:number}[];while(remain>.001&&guard++<400){const cap=useOvertime?w.overtime:w.capacity,k=w.id+'|'+d,avail=Math.max(0,cap-(loads.get(k)||0));if(avail){const amount=Math.min(avail,remain);plan.push({date:d,amount});remain-=amount}if(remain>.001)d=workday(addDay(d))}if(!best||d<best.finish)best={w,finish:d,plan}}
   if(!best)continue;for(const p of best.plan){const cap=useOvertime?best.w.overtime:best.w.capacity,k=best.w.id+'|'+p.date;loads.set(k,(loads.get(k)||0)+p.amount);out.push({date:p.date,worker:best.w.name,orderNo:order.orderNo,partCode:order.partCode,name:order.name,amount:p.amount,capacity:cap,due:order.due,status:p.date<=order.due?'按期':'延期'})}
@@ -95,7 +96,7 @@ export default function SchedulerApp(){
     let part=partMap.get(code);if(!part){part={id:stableId('part',code),code,name,category:name,unit,workers:[]};partMap.set(code,part)}else if(unit&&!part.unit)part.unit=unit;
     const id=stableId('order',code,customer,start,due,i+2),orderNo=`MES-${code}-${due.replaceAll('-','')||'待定'}-${i+2}`;
     imported.push({id,orderNo,customer,partCode:code,name,qty,done:Number(row['已完成数量'])||0,due,priority:Number(row['优先级'])||3,status:'待排'});
-    const reasons=[];if(!due)reasons.push('缺少交期');if(!qty)reasons.push('数量无效');if(!part.unit)reasons.push('缺少单件定额');if(!part.workers.length)reasons.push('无匹配人员');if(reasons.length)issues.push({key:id,partCode:code,name,reason:reasons.join('、')});
+    const reasons=[];if(!due)reasons.push('缺少交期');if(!qty)reasons.push('数量无效');if(!part.unit)reasons.push('缺少单件定额');if(!matchingWorkers(part,workers).length)reasons.push('无匹配人员');if(reasons.length)issues.push({key:id,partCode:code,name,reason:reasons.join('、')});
    });
    // A complete weekly MES workbook is a snapshot: replace every previous
    // MES/example import, while preserving manual and TEST orders.
