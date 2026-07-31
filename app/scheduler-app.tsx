@@ -58,7 +58,7 @@ function schedule(state:AppState,useOvertime=false){
 }
 
 export default function SchedulerApp(){
- const [data,setData]=useState<AppState>(initial),[tab,setTab]=useState('看板'),[loading,setLoading]=useState(true),[notice,setNotice]=useState('');
+ const [data,setData]=useState<AppState>(initial),[tab,setTab]=useState('看板'),[loading,setLoading]=useState(true),[notice,setNotice]=useState(''),[resultView,setResultView]=useState<'week'|'day'>('week');
  const [workerForm,setWorkerForm]=useState({name:'',capacity:'',overtime:'',skills:''});
  const [partForm,setPartForm]=useState({code:'',name:'',category:'',unit:'',workers:[] as string[]});
  const [orderForm,setOrderForm]=useState({orderNo:'',customer:'',partCode:'',qty:'',due:'',priority:'3'});
@@ -151,13 +151,24 @@ export default function SchedulerApp(){
    </section>
    <Form title="新增订单 / 插单" onSubmit={addOrder}><input placeholder="订单号" value={orderForm.orderNo} onChange={e=>setOrderForm({...orderForm,orderNo:e.target.value})}/><input placeholder="客户" value={orderForm.customer} onChange={e=>setOrderForm({...orderForm,customer:e.target.value})}/><select value={orderForm.partCode} onChange={e=>setOrderForm({...orderForm,partCode:e.target.value})}><option value="">选择工件</option>{data.parts.map(p=><option key={p.id} value={p.code}>{p.code} · {p.name}</option>)}</select><div className="row"><input type="number" placeholder="数量" value={orderForm.qty} onChange={e=>setOrderForm({...orderForm,qty:e.target.value})}/><select value={orderForm.priority} onChange={e=>setOrderForm({...orderForm,priority:e.target.value})}><option value="1">紧急</option><option value="2">交期必保</option><option value="3">普通</option></select></div><label>要求完成日期</label><input type="date" value={orderForm.due} onChange={e=>setOrderForm({...orderForm,due:e.target.value})}/></Form>
   </div>}
-  {tab==='排产结果'&&<section className="panel"><div className="panel-title"><div><small>按人员与日期展开</small><h3>每日派工计划</h3></div><div className="legend"><i className="green"/>按期 <i className="red"/>延期</div></div>{data.allocations.length?<GroupedSchedule rows={data.allocations} onEdit={editAllocation}/>:<div className="empty"><b>尚未生成计划</b><span>点击右上角“自动排产”开始计算。</span></div>}</section>}
+  {tab==='排产结果'&&<section className="panel"><div className="panel-title"><div><small>{resultView==='week'?'按自然周汇总人员任务':'按人员与日期展开'}</small><h3>{resultView==='week'?'每周生产计划':'每日派工计划'}</h3></div><div style={{display:'flex',alignItems:'center',gap:8}}><button className={resultView==='week'?'primary':'import'} onClick={()=>setResultView('week')}>周计划</button><button className={resultView==='day'?'primary':'import'} onClick={()=>setResultView('day')}>每日派工</button><div className="legend"><i className="green"/>按期 <i className="red"/>延期</div></div></div>{data.allocations.length?(resultView==='week'?<WeeklySchedule rows={data.allocations} onEdit={editAllocation}/>:<GroupedSchedule rows={data.allocations} onEdit={editAllocation}/>):<div className="empty"><b>尚未生成计划</b><span>点击右上角“自动排产”开始计算。</span></div>}</section>}
   {tab==='历史记录'&&<section className="panel"><div className="panel-title"><div><small>已确认计划快照</small><h3>周计划历史记录</h3></div></div>{data.history?.length?<div style={{display:'grid',gap:12}}>{data.history.map(h=><details key={h.id} style={{border:'1px solid #dfe7e1',borderRadius:12,padding:14}}><summary style={{cursor:'pointer',fontWeight:800}}>{h.label}<span style={{marginLeft:12,color:'#718078',fontSize:11}}>{h.allocations.length}条派工记录</span></summary><div style={{marginTop:12}}><GroupedSchedule rows={h.allocations}/></div></details>)}</div>:<div className="empty"><b>暂无历史记录</b><span>在排产结果中点击“确认本周计划”后保存。</span></div>}</section>}
   </main>
  </div>
 }
 function Metric({label,value,note,danger=false}:{label:string,value:string|number,note:string,danger?:boolean}){return <div className={`metric ${danger?'danger':''}`}><small>{label}</small><strong>{value}</strong><span>{note}</span></div>}
 function Form({title,onSubmit,children}:{title:string,onSubmit:(e:React.FormEvent)=>void,children:React.ReactNode}){return <form className="form-panel" onSubmit={onSubmit}><small>主动录入</small><h3>{title}</h3>{children}<button className="primary" type="submit">保存资料</button></form>}
+function weekMonday(date:string){const d=new Date(`${date}T00:00:00`),day=(d.getDay()+6)%7;d.setDate(d.getDate()-day);return formatLocalDate(d)}
+function WeeklySchedule({rows,onEdit}:{rows:Allocation[],onEdit?:(a:Allocation)=>void}){
+ const weeks=[...new Set(rows.map(r=>weekMonday(r.date)))].sort();
+ return <div style={{display:'grid',gap:14}}>{weeks.map((start,weekIndex)=>{const end=addDay(start,6),weekRows=rows.filter(r=>weekMonday(r.date)===start),workers=[...new Set(weekRows.map(r=>r.worker))],lateOrders=new Set(weekRows.filter(r=>r.status==='延期').map(r=>r.orderNo));return <details key={start} open={weekIndex===0} style={{border:'1px solid #cfddd4',borderRadius:14,background:'#f8fbf8',overflow:'hidden'}}>
+  <summary style={{cursor:'pointer',padding:'17px 19px',fontWeight:800,color:'#173b2d'}}>{weekIndex===0?'本周正式计划':'后续预排'} · {start} 至 {end}<span style={{marginLeft:14,color:'#718078',fontSize:11,fontWeight:600}}>{workers.length}人 · {new Set(weekRows.map(r=>r.orderNo)).size}个订单 · {weekRows.length}项派工{lateOrders.size?` · ${lateOrders.size}单延期`:''}</span></summary>
+  <div style={{padding:'0 12px 12px',display:'grid',gap:9}}>{workers.map((worker,wi)=>{const workerRows=weekRows.filter(r=>r.worker===worker).sort((a,b)=>a.date.localeCompare(b.date)),total=workerRows.reduce((s,r)=>s+r.amount,0),capacity=(workerRows[0]?.capacity||0)*5,orders=new Set(workerRows.map(r=>r.orderNo)),lastDate=workerRows[workerRows.length-1]?.date,late=new Set(workerRows.filter(r=>r.status==='延期').map(r=>r.orderNo)).size;return <details key={worker} open={weekIndex===0&&wi===0} style={{background:'#fff',border:'1px solid #e2e9e4',borderRadius:10}}>
+   <summary style={{cursor:'pointer',padding:'13px 15px',fontWeight:800}}>{worker}<span style={{marginLeft:12,color:'#718078',fontSize:11,fontWeight:600}}>{orders.size}个订单 · 工作量 {total.toFixed(1)} / 周产能 {capacity.toFixed(1)} · 周负荷 {Math.round(total/Math.max(1,capacity)*100)}% · 排至 {lastDate}{late?` · ${late}单延期`:''}</span></summary>
+   <ScheduleTable rows={workerRows} onEdit={onEdit}/>
+  </details>})}</div>
+ </details>})}</div>
+}
 function GroupedSchedule({rows,onEdit}:{rows:Allocation[],onEdit?:(a:Allocation)=>void}){
  const workers=[...new Set(rows.map(r=>r.worker))];
  return <div style={{display:'grid',gap:10}}>{workers.map((worker,wi)=>{const workerRows=rows.filter(r=>r.worker===worker),dates=[...new Set(workerRows.map(r=>r.date))],total=workerRows.reduce((s,r)=>s+r.amount,0),lastDate=dates[dates.length-1];return <details key={worker} open={wi===0} style={{border:'1px solid #dfe7e1',borderRadius:12,background:'#fbfcfa',overflow:'hidden'}}>
