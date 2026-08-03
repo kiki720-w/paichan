@@ -1,0 +1,2 @@
+import {env} from 'cloudflare:workers';
+export function GET(req:Request){const config=env as unknown as Record<string,string|undefined>,cookie=req.headers.get('cookie')||'',token=cookie.split(';').map(x=>x.trim()).find(x=>x.startsWith('xuheng_session='))?.slice('xuheng_session='.length);return Response.json({authenticated:!!config.APP_SESSION_TOKEN&&decodeURIComponent(token||'')===config.APP_SESSION_TOKEN})}
