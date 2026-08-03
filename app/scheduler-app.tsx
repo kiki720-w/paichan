@@ -124,7 +124,7 @@ export default function SchedulerApp(){
    await persist({...data,workers,parts:[...partMap.values()],orders,allocations:[],issues,importLog:[importEntry(file.name,'车工计划工作簿',pending.length,`${imported.length}项任务，${issues.length}项待确认`),...(data.importLog||[])].slice(0,30),importedAt:new Date().toLocaleString('zh-CN')},`MES周数据已更新：${imported.length} 项任务，${issues.length} 项待确认`);return;
   }
   const firstRows=XLSX.utils.sheet_to_json<Record<string,unknown>>(book.Sheets[book.SheetNames[0]],{defval:''});
-  const headers=new Set(Object.keys(firstRows[0]||{})),importLog=[importEntry(file.name,'未识别',firstRows.length,'已读取'),...(data.importLog||[])].slice(0,30);
+  const headers=new Set(Object.keys(firstRows[0]||{}).map(x=>x.trim())),fileTypeName=file.name.replaceAll(' ','').toLowerCase(),importLog=[importEntry(file.name,'未识别',firstRows.length,'已读取'),...(data.importLog||[])].slice(0,30);
   if(headers.has('工单编号')&&headers.has('计划编号')&&headers.has('数量(累计产量)')&&headers.has('工序名称')){
    const tasks:ProcessTask[]=firstRows.map((row,i)=>{const planned=numberFrom(row['计划数量']),completed=numberFrom(row['数量(累计产量)']),remaining=Math.max(0,planned-completed),workOrderNo=clean(row['工单编号']),operationNo=clean(row['工序号']),due=excelDate(row['工单要求完成时间']);return{id:stableId('task',workOrderNo,operationNo),workOrderNo,planNo:clean(row['计划编号']),partCode:clean(row['物料编码']),partName:clean(row['物料名称']),route:clean(row['工艺路线']),operationNo,operationName:clean(row['工序名称']),plannedQty:planned,completedQty:completed,remainingQty:remaining,due,status:remaining<=0?'已完成':completed>0?'进行中':'待前序确认'}}).filter(t=>t.workOrderNo&&t.partCode);
    const taskMap=new Map((data.processTasks||[]).map(t=>[t.id,t]));for(const t of tasks)taskMap.set(t.id,{...taskMap.get(t.id),...t});
@@ -139,7 +139,7 @@ export default function SchedulerApp(){
    const workerByName=new Map(data.workers.map(w=>[w.name.replaceAll(' ',''),w])),parts=data.parts.map(p=>{const hits=skillEvidence.filter(e=>e.partCode===p.code),ids=[...new Set([...p.workers,...hits.map(e=>workerByName.get(e.person.replaceAll(' ',''))?.id).filter(Boolean) as string[]])],units=hits.map(e=>e.avgUnitTime).filter(x=>x>0);return{...p,workers:ids,unit:p.unit||(+((units.reduce((s,x)=>s+x,0)/Math.max(1,units.length)).toFixed(2)))}});
    importLog[0]={...importLog[0],type:'报工记录',note:`合并 ${reported.size} 个工序报工；沉淀 ${skillEvidence.length} 条车工历史能力`};await persist({...data,processTasks:[...currentTasks.values()],skillEvidence,parts,allocations:[],importLog,importedAt:new Date().toLocaleString('zh-CN')},`报工记录已分析：${firstRows.length}行，历史能力${skillEvidence.length}条${firstRows.length===32767?'（疑似达到导出上限）':''}`);setTab('MES数据中心');return
   }
-  if(headers.has('姓名')&&headers.has('产品编码')&&headers.has('个人绩效总和')){
+  if(fileTypeName.includes('生产绩效')||(headers.has('姓名')&&headers.has('产品编码')&&(headers.has('个人绩效总和')||headers.has('产品绩效汇总')))){
    const evidence=new Map((data.skillEvidence||[]).map(e=>[`${e.person}|${e.partCode}|${e.operation}`,e]));for(const row of firstRows){const person=clean(row['姓名']),partCode=clean(row['产品编码']);if(!person||!partCode)continue;const key=`${person}|${partCode}|历史绩效`,old=evidence.get(key);evidence.set(key,{person,partCode,operation:'历史绩效',count:(old?.count||0)+Math.max(1,numberFrom(row['汇总'])),lastAt:new Date().toISOString().slice(0,10),avgUnitTime:0})}const skillEvidence=[...evidence.values()].sort((a,b)=>b.count-a.count).slice(0,4000);importLog[0]={...importLog[0],type:'生产绩效统计',note:`补充 ${skillEvidence.length} 条人员—产品历史证据`};await persist({...data,skillEvidence,importLog,importedAt:new Date().toLocaleString('zh-CN')},`生产绩效已导入：${firstRows.length}行`);setTab('MES数据中心');return
   }
   if(headers.has('编码(partCode)')&&headers.has('名称(partName)')){
@@ -153,9 +153,10 @@ export default function SchedulerApp(){
    }
    const orders=[...data.orders.filter(o=>!o.orderNo.startsWith('XQY-')),...imported];await persist({...data,orders,allocations:[],issues:[...(data.issues||[]).filter(x=>!x.key.startsWith('mes-xingqiyun-')),...issues],importLog:[importEntry(file.name,'计划项明细',firstRows.length,`${imported.length}项计划，${issues.length}项待确认`),...(data.importLog||[])].slice(0,30),importedAt:new Date().toLocaleString('zh-CN')},`兴企云原始计划已更新：${imported.length}项，${issues.length}项待确认`);return
   }
-  const rows=firstRows,byKey=new Map(data.orders.map(o=>[`${o.orderNo}|${o.partCode}`,o]));
-  for(const [i,r] of rows.entries()){const code=clean(r['物料编码']??r['物料']);if(!code)continue;const p=data.parts.find(x=>x.code===code),orderNo=clean(r['订单号']??r['生产订单'])||`MES-${code}-${i+2}`,key=`${orderNo}|${code}`;byKey.set(key,{id:byKey.get(key)?.id||stableId('order',orderNo,code),orderNo,customer:clean(r['客户']??r['使用单位']),partCode:code,name:clean(r['名称']??p?.name),qty:Number(r['数量'])||0,done:Number(r['已完成数量'])||0,due:excelDate(r['交期']??r['计划完成']),priority:Number(r['优先级'])||3,status:'待排'})}
-  await persist({...data,orders:[...byKey.values()],allocations:[],importLog:[importEntry(file.name,'通用MES订单',rows.length,'按订单号和物料编码增量更新'),...(data.importLog||[])].slice(0,30)},`MES订单已增量更新，共 ${rows.length} 行`)
+  const rows=firstRows,byKey=new Map(data.orders.map(o=>[`${o.orderNo}|${o.partCode}`,o]));let updated=0;
+  for(const [i,r] of rows.entries()){const code=clean(r['物料编码']??r['物料']);if(!code)continue;const p=data.parts.find(x=>x.code===code),orderNo=clean(r['订单号']??r['生产订单'])||`MES-${code}-${i+2}`,key=`${orderNo}|${code}`;byKey.set(key,{id:byKey.get(key)?.id||stableId('order',orderNo,code),orderNo,customer:clean(r['客户']??r['使用单位']),partCode:code,name:clean(r['名称']??p?.name),qty:Number(r['数量'])||0,done:Number(r['已完成数量'])||0,due:excelDate(r['交期']??r['计划完成']),priority:Number(r['优先级'])||3,status:'待排'});updated++}
+  if(!updated){await persist({...data,importLog:[importEntry(file.name,'未识别',rows.length,'未发现可导入的订单字段'),...(data.importLog||[])].slice(0,30)},`未识别 ${file.name} 的数据结构，请检查导出模板`);return}
+  await persist({...data,orders:[...byKey.values()],allocations:[],importLog:[importEntry(file.name,'通用MES订单',updated,'按订单号和物料编码增量更新'),...(data.importLog||[])].slice(0,30)},`MES订单已增量更新，共 ${updated} 行`)
  }
  if(loading)return <main className="loading">正在载入排产数据…</main>;
  const tabs=['看板','MES数据中心','订单管理','工序任务','预警中心','外协任务池','人员产能','工件定额','排产结果','历史记录'];
