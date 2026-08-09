@@ -42,8 +42,8 @@ const initial:AppState={workers:officialLatheWorkers,parts:[
 ],allocations:[],lastRun:''};
 const emptyFactoryState:AppState={workers:[],parts:[],orders:[],allocations:[],lastRun:'',issues:[],history:[],processTasks:[],skillEvidence:[],importLog:[]};
 const factoryName=(factory:Factory)=>factory==='xian'?'西安工厂':'兴平工厂';
-// Donglong MES exports and the supplied lathe capacity workbook belong to Xi'an.
-const stateForFactory=(factory:Factory)=>factory==='xian'?initial:emptyFactoryState;
+// The original lathe capacity workbook belongs to the Xingping production team.
+const stateForFactory=(factory:Factory)=>factory==='xingping'?initial:emptyFactoryState;
 const summaryOf=(state:AppState|null|undefined):FactorySummary=>({orders:state?.orders?.filter(o=>o.status!=='已完成').length||0,workers:state?.workers?.filter(w=>w.active).length||0,allocations:state?.allocations?.length||0,lastRun:state?.lastRun||''});
 
 const formatLocalDate=(d:Date)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
