@@ -13,17 +13,17 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "序衡 APS · 车间智能排产",
-  description: "面向机加工车间的有限产能自动排产系统",
+  title: "序衡 APS · 车工排产第一版",
+  description: "面向车工班组的Excel导入式有限产能排产系统",
   openGraph: {
-    title: "序衡 APS · 车间智能排产",
-    description: "把交期、人员与每日产能放进同一张计划里",
+    title: "序衡 APS · 车工排产第一版",
+    description: "通过MES导出表格生成车工六日排产计划",
     images: [{ url: "/og.png", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "序衡 APS · 车间智能排产",
-    description: "有限产能自动排产、每日派工与延期预警",
+    title: "序衡 APS · 车工排产第一版",
+    description: "车工有限产能排产、每日派工与人工确认",
     images: ["/og.png"],
   },
   icons: {
