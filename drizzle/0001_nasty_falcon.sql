@@ -5,4 +5,4 @@ CREATE TABLE `factory_state` (
 );
 
 INSERT OR IGNORE INTO `factory_state` (`factory`,`data`,`updated_at`)
-SELECT 'xingping',`data`,CURRENT_TIMESTAMP FROM `app_state` WHERE `id`=1;
+SELECT 'xian',`data`,CURRENT_TIMESTAMP FROM `app_state` WHERE `id`=1;
