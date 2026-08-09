@@ -86,6 +86,11 @@ const pendingConnections=[
 const matchingWorkers=(part:Part,workers:Worker[])=>isExternal(part)?[]:workers.filter(w=>w.active&&(part.workers.length
  ?part.workers.includes(w.id)
  :w.skills.some(s=>part.category.includes(s)||s.includes(part.category))));
+const factoryFromRows=(rows:Record<string,unknown>[]):Factory|null=>{
+ const fields=['责任单位','计划编制部门','生产车间(选择)','所属工厂','工厂'];let xian=0,xingping=0;
+ for(const row of rows)for(const key of fields){const value=clean(row[key]);if(/西安/.test(value))xian++;if(/兴平/.test(value))xingping++}
+ return xian&&!xingping?'xian':xingping&&!xian?'xingping':null
+};
 
 const mergeOfficialWorkers=(workers:Worker[]=[])=>officialLatheWorkers.map(official=>{
  const legacyNames=new Set([official.name,official.name.replace(/（[盘轴]）/g,''),official.name==='王超伟'?'王朝伟':'',official.name.startsWith('赵超阳')?'赵朝阳':''].filter(Boolean));
@@ -184,6 +189,8 @@ export default function SchedulerApp(){
    await persist({...data,workers,allocations:[],importLog,importedAt:new Date().toLocaleString('zh-CN')},`车工能力表已导入：${workers.length}人，已按标准工作量更新`);setTab('人员产能');return
   }
   const firstRows=XLSX.utils.sheet_to_json<Record<string,unknown>>(firstSheet,{defval:''});
+  const detectedFactory=factoryFromRows(firstRows);
+  if(detectedFactory&&detectedFactory!==activeFactory){setNotice(`文件归属${factoryName(detectedFactory)}，当前为${factoryName(activeFactory)}，未执行导入`);setTimeout(()=>setNotice(''),4200);return}
   const headers=new Set(Object.keys(firstRows[0]||{}).map(x=>x.trim())),fileTypeName=file.name.replaceAll(' ','').toLowerCase(),importLog=[importEntry(file.name,'未识别',firstRows.length,'已读取'),...(data.importLog||[])].slice(0,30);
   if(headers.has('工单编号')&&headers.has('计划编号')&&headers.has('数量(累计产量)')&&headers.has('工序名称')){
    const tasks:ProcessTask[]=firstRows.map((row,i)=>{const planned=numberFrom(row['计划数量']),completed=numberFrom(row['数量(累计产量)']),remaining=Math.max(0,planned-completed),workOrderNo=clean(row['工单编号']),operationNo=clean(row['工序号']),due=excelDate(row['工单要求完成时间']);return{id:stableId('task',workOrderNo,operationNo),workOrderNo,planNo:clean(row['计划编号']),partCode:clean(row['物料编码']),partName:clean(row['物料名称']),route:clean(row['工艺路线']),operationNo,operationName:clean(row['工序名称']),plannedQty:planned,completedQty:completed,remainingQty:remaining,due,status:remaining<=0?'已完成':completed>0?'进行中':'待前序确认'}}).filter(t=>t.workOrderNo&&t.partCode);
