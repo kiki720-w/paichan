@@ -30,6 +30,22 @@ const officialLatheWorkers:Worker[]=[
  {id:'w11',name:'南剑（轴）',team:'轴类车工',capacity:50,overtime:60,skills:['轴类校准件','端面槽类校准件'],active:true},
 ];
 
+// Confirmed by the Xi'an workshop on 2026-08-10. Blank overtime values in
+// the signed form fall back to the confirmed 8-hour capacity until the
+// workshop supplies a separate overtime figure.
+const confirmedXianLatheWorkers:Worker[]=[
+ {id:'xian-w1',name:'豆少龙',team:'车工组',capacity:219.12,overtime:269.24,skills:['支撑','压盖','改制螺钉','铜套','定位盘','定位座'],active:true},
+ {id:'xian-w2',name:'范天鑫',team:'车工组',capacity:199.6,overtime:241,skills:['本体','芯轴','上拉杆','卡盘盖','卡爪座','支撑销','卡盘球头柱','堵头','气消'],active:true},
+ {id:'xian-w3',name:'颉斌',team:'车工组',capacity:171.04,overtime:220.85,skills:['粘接涨套','弹性夹头','精车圆弧','精车锥面'],active:true},
+ {id:'xian-w4',name:'李永超',team:'车工组',capacity:187.52,overtime:228.54,skills:['粘接涨套','弹性夹头'],active:true},
+ {id:'xian-w5',name:'王超',team:'车工组',capacity:187.76,overtime:214.98,skills:['支撑','压盖','防尘盖','定位块1','定位块2','定位柱'],active:true},
+ {id:'xian-w6',name:'尹博迪',team:'车工组（加班能力待确认）',capacity:88.72,overtime:88.72,skills:['底座','锻件校准件'],active:true},
+ {id:'xian-w7',name:'张博（钳工）',team:'钳工／岗位待确认',capacity:0,overtime:0,skills:[],active:false},
+ {id:'xian-w8',name:'张佳荣',team:'车工组',capacity:233.28,overtime:281.68,skills:['本体','芯轴','下拉杆','卡盘定位销','压紧S杆','压板','支撑柱','通气杆'],active:true},
+ {id:'xian-w9',name:'朱浩',team:'车工组（加班能力待确认）',capacity:178.32,overtime:178.32,skills:['锻件支撑','锻件涨套','卡盘盖','定位座'],active:true},
+ ...['白晓刚','豆银波','杜永亮','王科','席晓园','张冲锋','张峰峰','张侃','张宽同','周阳文'].map((name,index)=>({id:`xian-pending-${index+1}`,name,team:'岗位与能力待确认',capacity:0,overtime:0,skills:[],active:false})),
+];
+
 const initial:AppState={workers:officialLatheWorkers,parts:[
  {id:'p1',code:'B02004872',name:'防转螺钉',category:'各类螺钉',operationCode:'TURN',processMode:'internal',unit:3.5,workers:['w9']},
  {id:'p2',code:'B02004875',name:'螺母',category:'螺母',operationCode:'TURN',processMode:'internal',unit:10,workers:['w8']},
@@ -43,7 +59,7 @@ const initial:AppState={workers:officialLatheWorkers,parts:[
 const emptyFactoryState:AppState={workers:[],parts:[],orders:[],allocations:[],lastRun:'',issues:[],history:[],processTasks:[],skillEvidence:[],importLog:[]};
 const factoryName=(factory:Factory)=>factory==='xian'?'西安工厂':'兴平工厂';
 // The original lathe capacity workbook belongs to the Xingping production team.
-const stateForFactory=(factory:Factory)=>factory==='xingping'?initial:emptyFactoryState;
+const stateForFactory=(factory:Factory)=>factory==='xingping'?initial:{...emptyFactoryState,workers:confirmedXianLatheWorkers};
 const summaryOf=(state:AppState|null|undefined):FactorySummary=>({orders:state?.orders?.filter(o=>o.status!=='已完成').length||0,workers:state?.workers?.length||0,parts:state?.parts?.length||0,allocations:state?.allocations?.length||0,lastRun:state?.lastRun||''});
 
 const formatLocalDate=(d:Date)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
@@ -98,6 +114,10 @@ const mergeOfficialWorkers=(workers:Worker[]=[])=>officialLatheWorkers.map(offic
  const existing=workers.find(w=>w.id===official.id||legacyNames.has(w.name));
  return {...official,active:existing?.active??true};
 });
+const mergeConfirmedXianWorkers=(workers:Worker[]=[])=>confirmedXianLatheWorkers.map(confirmed=>{
+ const existing=workers.find(worker=>worker.name===confirmed.name);
+ return {...confirmed,id:existing?.id||confirmed.id};
+});
 
 function schedule(state:AppState,useOvertime=false){
  const loads=new Map<string,number>(),out:Allocation[]=[];
@@ -123,7 +143,7 @@ export default function SchedulerApp(){
  const [partForm,setPartForm]=useState({code:'',name:'',category:'',operationCode:'TURN',processMode:'internal' as 'internal'|'external',unit:'',workers:[] as string[]});
  const [orderForm,setOrderForm]=useState({orderNo:'',customer:'',partCode:'',qty:'',due:'',priority:'3'});
  const [resolving,setResolving]=useState<Order|null>(null),[resolveForm,setResolveForm]=useState({unit:'',category:'',operationCode:'TURN',processMode:'internal' as 'internal'|'external',workers:[] as string[]});
- const normalizeState=(state:AppState|null,factory:Factory)=>{const base=state||stateForFactory(factory);return{...base,parts:(base.parts||[]).map((p:Part)=>({...p,operationCode:p.operationCode||'TURN',processMode:p.processMode||'internal'})),workers:factory==='xingping'?mergeOfficialWorkers(base.workers||[]):base.workers||[],orders:base.orders||[],allocations:base.allocations||[],processTasks:base.processTasks||[],skillEvidence:base.skillEvidence||[],importLog:base.importLog||[]}};
+ const normalizeState=(state:AppState|null,factory:Factory)=>{const base=state||stateForFactory(factory);return{...base,parts:(base.parts||[]).map((p:Part)=>({...p,operationCode:p.operationCode||'TURN',processMode:p.processMode||'internal'})),workers:factory==='xingping'?mergeOfficialWorkers(base.workers||[]):mergeConfirmedXianWorkers(base.workers||[]),orders:base.orders||[],allocations:base.allocations||[],processTasks:base.processTasks||[],skillEvidence:base.skillEvidence||[],importLog:base.importLog||[]}};
  async function loadFactory(factory:Factory){const r=await fetch(`/api/state?factory=${factory}`,{cache:'no-store'});if(!r.ok)throw new Error();const result=await r.json(),next=normalizeState(result.state||null,factory);setActiveFactory(factory);setData(next);setFactorySummaries(s=>({...s,[factory]:summaryOf(next)}));return next}
  async function refreshFactorySummaries(){if(sessionInfo?.role!=='main')return;const entries=await Promise.all((['xian','xingping'] as Factory[]).map(async factory=>{const r=await fetch(`/api/state?factory=${factory}`,{cache:'no-store'}),x=await r.json();return[factory,summaryOf(normalizeState(x.state||null,factory))] as const}));setFactorySummaries(Object.fromEntries(entries) as Record<Factory,FactorySummary>)}
  useEffect(()=>{fetch('/api/auth/session',{cache:'no-store'}).then(r=>r.json()).then(async x=>{if(!x.authenticated)return;const info:SessionInfo={role:x.role,factory:x.factory,displayName:x.displayName};setAuthenticated(true);setSessionInfo(info);const factory:Factory=info.role==='factory'?info.factory!:'xingping';const current=await loadFactory(factory);if(!current.orders.length&&!current.workers.length&&factory==='xian')setFactorySummaries(s=>({...s,xian:summaryOf(current)}));if(info.role==='main'){const entries=await Promise.all((['xian','xingping'] as Factory[]).map(async f=>{const r=await fetch(`/api/state?factory=${f}`,{cache:'no-store'}),v=await r.json();return[f,summaryOf(normalizeState(v.state||null,f))] as const}));setFactorySummaries(Object.fromEntries(entries) as Record<Factory,FactorySummary>)}}).finally(()=>setLoading(false))},[]);
