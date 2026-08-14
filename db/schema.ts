@@ -1,3 +1,5 @@
 import {integer,sqliteTable,text} from 'drizzle-orm/sqlite-core';
 export const appState=sqliteTable('app_state',{id:integer('id').primaryKey(),data:text('data').notNull(),updatedAt:text('updated_at').notNull()});
-export const factoryState=sqliteTable('factory_state',{factory:text('factory').primaryKey(),data:text('data').notNull(),updatedAt:text('updated_at').notNull()});
+export const factoryState=sqliteTable('factory_state',{factory:text('factory').primaryKey(),data:text('data').notNull(),updatedAt:text('updated_at').notNull(),revision:integer('revision').notNull().default(1)});
+export const factoryStateBackup=sqliteTable('factory_state_backup',{id:text('id').primaryKey(),factory:text('factory').notNull(),data:text('data').notNull(),revision:integer('revision').notNull(),actor:text('actor').notNull(),action:text('action').notNull(),createdAt:text('created_at').notNull()});
+export const factoryAudit=sqliteTable('factory_audit',{id:text('id').primaryKey(),factory:text('factory').notNull(),actor:text('actor').notNull(),action:text('action').notNull(),summary:text('summary').notNull(),revision:integer('revision').notNull(),createdAt:text('created_at').notNull()});
