@@ -1,1 +1,0 @@
-ALTER TABLE `factory_state` ADD `revision` integer DEFAULT 1 NOT NULL;
