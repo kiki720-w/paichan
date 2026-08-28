@@ -1,7 +1,7 @@
 'use client';
 import {useEffect,useMemo,useRef,useState,type ReactNode} from 'react';
 import * as XLSX from 'xlsx';
-import {drawingFromRow,matchWorkers,completionStatus,recordCompletion,preserveImportedCompletion,allocationBelongsTo,remainingAllocations,orderCandidates,assignmentAwareIssues,matchesOrderSearch,assignOrderWorker,type WorkerAssignment,type CompletionRecord} from './feedback-rules';
+import {drawingFromRow,matchWorkers,completionStatus,recordCompletion,preserveImportedCompletion,allocationBelongsTo,remainingAllocations,orderCandidates,assignmentAwareIssues,matchesOrderSearch,assignOrderWorker,planOrderTransfer,type WorkerAssignment,type CompletionRecord} from './feedback-rules';
 
 type Worker={id:string;name:string;team:string;capacity:number;overtime:number;skills:string[];active:boolean};
 type Part={drawingNo?:string,id:string,code:string,name:string,category:string,unit:number,workers:string[],operationCode?:string,processMode?:'internal'|'external'};
@@ -150,6 +150,7 @@ function schedule(state:AppState,useOvertime=false){
 
 export default function SchedulerApp(){
  const [orderSearch,setOrderSearch]=useState('');
+ const [rescheduleAssignment,setRescheduleAssignment]=useState(false);
  const [assigning,setAssigning]=useState<Order|null>(null),[assignmentForm,setAssignmentForm]=useState({workerId:'',reason:'',transfer:false}),[assignmentError,setAssignmentError]=useState(''),[assignmentSaving,setAssignmentSaving]=useState(false);
  const [data,setData]=useState<AppState>(initial),[tab,setTab]=useState('看板'),[loading,setLoading]=useState(true),[authenticated,setAuthenticated]=useState(false),[authError,setAuthError]=useState(''),[notice,setNotice]=useState(''),[resultView,setResultView]=useState<'week'|'day'>('week');
  const [sessionInfo,setSessionInfo]=useState<SessionInfo|null>(null),[activeFactory,setActiveFactory]=useState<Factory>('xingping'),[factorySummaries,setFactorySummaries]=useState<Record<Factory,FactorySummary>>({xian:summaryOf(null),xingping:summaryOf(null)});
@@ -179,7 +180,12 @@ export default function SchedulerApp(){
  const drawingFor=(row:{drawingNo?:string;partCode:string;orderId?:string;orderNo?:string})=>row.drawingNo||data.orders.find(o=>row.orderId?o.id===row.orderId:o.orderNo===row.orderNo&&o.partCode===row.partCode)?.drawingNo||data.parts.find(p=>p.code===row.partCode)?.drawingNo||'';
  const currentRows:Allocation[]=data.allocations.map(a=>({...a,drawingNo:drawingFor(a)}));
  const visibleOrders=data.orders.filter(o=>matchesOrderSearch(o,data.parts.find(p=>p.code===o.partCode)?.drawingNo,orderSearch));
- function beginAssignment(order:Order){const rows=data.allocations.filter(a=>allocationBelongsTo(a,order,data.orders));setAssigning(order);setAssignmentForm({workerId:order.workerAssignment?.workerId||data.workers.find(w=>w.name===rows[0]?.worker)?.id||'',reason:'',transfer:rows.length>0});setAssignmentError('')}
+ const transferPreview=useMemo(()=>{
+  if(!rescheduleAssignment||!assigning)return null;
+  try{return {plan:planOrderTransfer({...assigning,drawingNo:drawingFor(assigning)},data.orders,data.allocations,data.workers,assignmentForm.workerId,data.parts.find(p=>p.code===assigning.partCode)?.unit||0,today()),error:''};}
+  catch(error){return {plan:null,error:error instanceof Error?error.message:'无法计算顺延安排'};}
+ },[rescheduleAssignment,assigning,assignmentForm.workerId,data]);
+ function beginAssignment(order:Order){setRescheduleAssignment(false);const rows=data.allocations.filter(a=>allocationBelongsTo(a,order,data.orders));setAssigning(order);setAssignmentForm({workerId:order.workerAssignment?.workerId||data.workers.find(w=>w.name===rows[0]?.worker)?.id||'',reason:'',transfer:rows.length>0});setAssignmentError('')}
  function changeAllocationWorker(a:Allocation){const order=data.orders.find(o=>allocationBelongsTo(a,o,data.orders));if(!order){setNotice('无法唯一对应订单，请在订单管理中核对');return}beginAssignment(order);setAssignmentForm({workerId:data.workers.find(w=>w.name===a.worker)?.id||'',reason:'',transfer:true})}
  async function saveAssignment(e:React.FormEvent){
   e.preventDefault();if(!assigning||assignmentSaving)return;setAssignmentError('');
@@ -187,12 +193,17 @@ export default function SchedulerApp(){
    const order=data.orders.find(o=>o.id===assigning.id);if(!order)throw new Error('订单已变更，请重新打开');
    if(isExternal(data.parts.find(p=>p.code===order.partCode)))throw new Error('外协任务不参与内部人员指定');
    if(!assignmentForm.transfer&&data.allocations.some(a=>allocationBelongsTo(a,order,data.orders))&&!window.confirm('你选择了“仅下次排产生效”。当前排产中的员工不会改变，刷新后也不会改变。确定只保存下次排产规则吗？'))return;
-   const {order:updated,allocations}=assignOrderWorker(order,data.orders,data.allocations,data.workers,assignmentForm.workerId,assignmentForm.reason,sessionInfo?.displayName||'计划员',new Date().toISOString(),assignmentForm.transfer);
+   let {order:updated,allocations}=assignOrderWorker(order,data.orders,data.allocations,data.workers,assignmentForm.workerId,assignmentForm.reason,sessionInfo?.displayName||'计划员',new Date().toISOString(),assignmentForm.transfer&&!rescheduleAssignment);
+   if(rescheduleAssignment){
+    const plan=planOrderTransfer({...order,drawingNo:drawingFor(order)},data.orders,data.allocations,data.workers,assignmentForm.workerId,data.parts.find(p=>p.code===order.partCode)?.unit||0,today());
+    if(!window.confirm(`将此订单全部剩余工作量 ${plan.required.toFixed(1)} 转给指定员工，共 ${plan.planned.length} 个工作日，预计 ${plan.finish} 完成（${plan.late?'超过交期 '+order.due:'按期'}）。其他订单不变，不自动加班；替换本订单当前派工及未排缺口。确认保存？`))return;
+    allocations=plan.allocations.map(a=>a.orderId===order.id?{...a,reason:`订单人工指定并顺延：${assignmentForm.reason}；确认人：${sessionInfo?.displayName||'计划员'}`} :a);
+   }
    if(assignmentForm.transfer&&(data.planStatus==='已发布'||data.planStatus==='已确认'||data.allocations.some(a=>allocationBelongsTo(a,order,data.orders)&&a.date<=today()))&&!window.confirm('此订单包含当天/已确认计划，是否按填写的原因同步转派？历史快照不变。'))return;
    const name=data.workers.find(w=>w.id===assignmentForm.workerId)?.name;
-   const next={...data,orders:data.orders.map(o=>o.id===order.id?updated:o),allocations,issues:assignmentAwareIssues(data.issues||[],data.orders.map(o=>o.id===order.id?updated:o),data.parts,data.workers),...(assignmentForm.transfer?{planStatus:'已变更' as PlanStatus,planUpdatedAt:new Date().toLocaleString('zh-CN'),planUpdatedBy:sessionInfo?.displayName,planChangeNote:assignmentForm.reason,scheduleShortages:(data.scheduleShortages||[]).map(a=>allocationBelongsTo(a,order,data.orders)?{...a,suggestedWorker:name,estimatedFinish:undefined,reason:'订单已人工指定人员，剩余任务请重新排产'}:a)}:{})};
+   const next={...data,orders:data.orders.map(o=>o.id===order.id?updated:o),allocations,issues:assignmentAwareIssues(data.issues||[],data.orders.map(o=>o.id===order.id?updated:o),data.parts,data.workers),...(assignmentForm.transfer?{planStatus:'已变更' as PlanStatus,planUpdatedAt:new Date().toLocaleString('zh-CN'),planUpdatedBy:sessionInfo?.displayName,planChangeNote:assignmentForm.reason,scheduleShortages:rescheduleAssignment?(data.scheduleShortages||[]).filter(a=>!allocationBelongsTo(a,order,data.orders)):(data.scheduleShortages||[]).map(a=>allocationBelongsTo(a,order,data.orders)?{...a,suggestedWorker:name,estimatedFinish:undefined,reason:'订单已人工指定人员，剩余任务请重新排产'}:a)}:{})};
    setAssignmentSaving(true);
-   if(await persist(next,`${order.orderNo}：${name?`指定 ${name}`:'恢复自动匹配'}；${assignmentForm.transfer?'已同步转派当前订单的派工':'已有派工不变，下次排产生效'}；${assignmentForm.reason}`,'订单指定加工人员'))setAssigning(null);else setAssignmentError('未保存，请核对最新数据后重试');
+   if(await persist(next,`${order.orderNo}：${name?`指定 ${name}`:'恢复自动匹配'}；${rescheduleAssignment?'已按指定人员正常班剩余产能顺延':assignmentForm.transfer?'已同步转派当前订单的派工':'已有派工不变，下次排产生效'}；${assignmentForm.reason}`,'订单指定加工人员'))setAssigning(null);else setAssignmentError('未保存，请核对最新数据后重试');
   }catch(error){setAssignmentError(error instanceof Error?error.message:'保存失败')}finally{setAssignmentSaving(false)}
  }
  function beginCompletion(order:Order){setCompleting(order);setCompletionForm({done:String(order.done),reason:''});setCompletionError('')}
@@ -374,15 +385,17 @@ export default function SchedulerApp(){
   {assigning&&<div role="dialog" aria-modal="true" aria-label="指定加工人员" style={{position:'fixed',inset:0,background:'#10261dcc',zIndex:40,display:'grid',placeItems:'center',padding:20}}><form onSubmit={saveAssignment} style={{maxHeight:'90dvh',overflowY:'auto',background:'#fff',borderRadius:16,padding:24,display:'grid',gap:14,width:'min(580px,96vw)'}}>
    <h3>指定订单加工人员</h3><div>{assigning.orderNo} · {assigning.name}<br/>图号：{drawingFor(assigning)||'未提供'} · 物料：{assigning.partCode}</div>
    <p>仅约束当前订单，不修改其他同类工件。人工指定优先于类别匹配，请确认所选人员具备该零件的加工能力。</p>
-   <label>加工人员<select value={assignmentForm.workerId} onChange={e=>setAssignmentForm({...assignmentForm,workerId:e.target.value,transfer:e.target.value?(!assignmentForm.workerId?data.allocations.some(a=>allocationBelongsTo(a,assigning,data.orders)):assignmentForm.transfer):false})}><option value="">自动匹配（取消订单指定）</option>{data.workers.filter(w=>w.active).map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select></label>
+   <label>加工人员<select value={assignmentForm.workerId} onChange={e=>{if(!e.target.value)setRescheduleAssignment(false);setAssignmentForm({...assignmentForm,workerId:e.target.value,transfer:e.target.value?(!assignmentForm.workerId?data.allocations.some(a=>allocationBelongsTo(a,assigning,data.orders)):assignmentForm.transfer):false})}}><option value="">自动匹配（取消订单指定）</option>{data.workers.filter(w=>w.active).map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select></label>
    <label>指定 / 调整原因<input required value={assignmentForm.reason} onChange={e=>setAssignmentForm({...assignmentForm,reason:e.target.value})} placeholder="例如：已确认该图号为专线零件，由所选人员加工"/></label>
    <fieldset className="assignment-mode"><legend>什么时候生效</legend>
-    <label><input type="radio" name="assignment-mode" disabled={!assignmentForm.workerId||assignmentSaving} checked={assignmentForm.transfer} onChange={()=>setAssignmentForm({...assignmentForm,transfer:true})}/><span><b>立即更新当前排产</b><small>整单已有派工换为所选员工，保持日期和工作量；刷新后保留。</small></span></label>
-    <label><input type="radio" name="assignment-mode" disabled={assignmentSaving} checked={!assignmentForm.transfer} onChange={()=>setAssignmentForm({...assignmentForm,transfer:false})}/><span><b>仅下次排产生效</b><small>只保存人员规则，当前排产不会改变，需要之后重新生成排产。</small></span></label>
+    <label><input type="radio" name="assignment-mode" disabled={!assignmentForm.workerId||assignmentSaving} checked={assignmentForm.transfer&&!rescheduleAssignment} onChange={()=>{setRescheduleAssignment(false);setAssignmentForm({...assignmentForm,transfer:true})}}/><span><b>立即更新当前排产</b><small>整单已有派工换为所选员工，保持日期和工作量；刷新后保留。</small></span></label>
+    <label><input type="radio" name="assignment-mode" disabled={!assignmentForm.workerId||assignmentSaving} checked={rescheduleAssignment} onChange={()=>{setRescheduleAssignment(true);setAssignmentForm({...assignmentForm,transfer:true})}}/><span><b>转派并按剩余产能顺延</b><small>从今天起，按正常班产能安排本订单全部未完成工作，含未排缺口；跳过周末，不挤占其他订单，不自动加班。</small></span></label>
+    <label><input type="radio" name="assignment-mode" disabled={assignmentSaving} checked={!assignmentForm.transfer} onChange={()=>{setRescheduleAssignment(false);setAssignmentForm({...assignmentForm,transfer:false})}}/><span><b>仅下次排产生效</b><small>只保存人员规则，当前排产不会改变，需要之后重新生成排产。</small></span></label>
    </fieldset>
-   <div className="assignment-preview" role="status">{assignmentForm.transfer?`将更新此订单的 ${data.allocations.filter(a=>allocationBelongsTo(a,assigning,data.orders)).length} 条派工 → ${data.workers.find(w=>w.id===assignmentForm.workerId)?.name||'请先选择员工'}`:'注意：保存并刷新后，当前派工仍然是原员工。'}</div>
+   <div className="assignment-preview" role="status">{rescheduleAssignment?'请核对下方顺延预览，确认后才会保存。':assignmentForm.transfer?`将更新此订单的 ${data.allocations.filter(a=>allocationBelongsTo(a,assigning,data.orders)).length} 条派工 → ${data.workers.find(w=>w.id===assignmentForm.workerId)?.name||'请先选择员工'}`:'注意：保存并刷新后，当前派工仍然是原员工。'}</div>
+   {transferPreview&&(transferPreview.plan?<div className="transfer-preview"><b>预计完成：{transferPreview.plan.finish} · {transferPreview.plan.late?'延期（交期 '+assigning.due+'）':'按期'}</b><p>剩余 {Math.max(0,assigning.qty-assigning.done)} 件 · 工作量 {transferPreview.plan.required.toFixed(1)} · {transferPreview.plan.planned.length} 个工作日</p><small>从今天重新安排全部未完成量；历史快照不变。暂按周一至周五计算，未计入节假日和请假。</small><div className="table-wrap" style={{maxHeight:180}}><table><thead><tr><th>日期</th><th>员工</th><th>本单工作量</th><th>结果</th></tr></thead><tbody>{transferPreview.plan.planned.map(a=><tr key={a.date}><td>{a.date}</td><td>{a.worker}</td><td>{a.amount.toFixed(1)}</td><td>{a.status}</td></tr>)}</tbody></table></div></div>:<p role="alert">{transferPreview.error}</p>)}
    <small>超出目标员工当日产能时会明确报错，不会自动改为下次生效。历史计划快照不会改写。</small>
-   {assignmentError&&<span role="alert" className="late">{assignmentError}</span>}<div style={{display:'flex',gap:8}}><button type="submit" disabled={assignmentSaving} className="primary">{assignmentSaving?'正在保存…':assignmentForm.transfer?'保存并更新当前排产':'仅保存下次排产规则'}</button><button type="button" disabled={assignmentSaving} className="import" onClick={()=>setAssigning(null)}>取消</button></div>
+   {assignmentError&&<span role="alert" className="late">{assignmentError}</span>}<div style={{display:'flex',gap:8}}><button type="submit" disabled={assignmentSaving||(rescheduleAssignment&&!transferPreview?.plan)} className="primary">{assignmentSaving?'正在保存…':rescheduleAssignment?'确认转派并保存顺延计划':assignmentForm.transfer?'保存并更新当前排产':'仅保存下次排产规则'}</button><button type="button" disabled={assignmentSaving} className="import" onClick={()=>setAssigning(null)}>取消</button></div>
   </form></div>}
   {completing&&<div role="dialog" aria-modal="true" aria-label="人工完工登记" style={{position:'fixed',inset:0,background:'#10261dcc',zIndex:40,display:'grid',placeItems:'center',padding:20}}><form onSubmit={saveCompletion} style={{background:'#fff',borderRadius:16,padding:24,display:'grid',gap:14,width:'min(580px,96vw)'}}>
    <h3>人工完工登记 / 更正</h3><div>{completing.orderNo} · {completing.name}<br/>物料：{completing.partCode} · 图号：{drawingFor(completing)||'未提供'}</div>

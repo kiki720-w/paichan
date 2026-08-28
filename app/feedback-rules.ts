@@ -67,6 +67,36 @@ export function assignOrderWorker<J extends Job,A extends {orderId?:string;order
  }
  return {order:{...order,workerAssignment:{workerId,reason:reason.trim(),by,at}},allocations};
 }
+// Rebuild only this order's unfinished work; all other allocations stay untouched.
+export function planOrderTransfer<A extends {orderId?:string;orderNo:string;partCode:string;date:string;worker:string;amount:number;capacity:number;name:string;due:string;status:string}>(order:Job,orders:Job[],rows:A[],workers:(SkillWorker&{name:string;capacity:number})[],workerId:string,unit:number,startDate:string){
+ const worker=workers.find(w=>w.id===workerId&&w.active);
+ if(!worker||!Number.isFinite(worker.capacity)||worker.capacity<=0)throw new Error('所选员工缺少有效的正常日产能，请先确认人员能力');
+ if(!Number.isFinite(unit)||unit<=0)throw new Error('缺少有效单件定额，无法顺延，请先补齐工件资料');
+ const required=(order.qty-order.done)*unit;
+ if(order.status==='已完成'||!Number.isFinite(required)||required<=0)throw new Error('该订单没有可安排的剩余工作量');
+ const validDate=(s:string)=>/^\d{4}-\d{2}-\d{2}$/.test(s)&&Number.isFinite(Date.parse(s+'T00:00:00Z'))&&new Date(s+'T00:00:00Z').toISOString().slice(0,10)===s;
+ if(!validDate(startDate)||!order.due||!validDate(order.due))throw new Error('开始日期或订单交期无效，请先补齐日期');
+ if(rows.some(a=>!a.orderId&&a.orderNo===order.orderNo&&a.partCode===order.partCode&&!allocationBelongsTo(a,order,orders)))throw new Error('旧派工无法唯一对应订单，请先核对订单编号');
+ const others=rows.filter(a=>!allocationBelongsTo(a,order,orders));
+ const loads=new Map<string,number>();
+ for(const row of others.filter(a=>a.worker===worker.name)){
+  if(!Number.isFinite(row.amount)||row.amount<0)throw new Error('目标员工已有工作量无效，请先核对派工');
+  loads.set(row.date,(loads.get(row.date)||0)+row.amount);
+ }
+ const planned:{orderId:string;orderNo:string;partCode:string;name:string;drawingNo?:string;date:string;worker:string;amount:number;capacity:number;due:string;status:string;reason:string;candidates:string[]}[]=[];
+ let remaining=required;
+ const date=new Date(startDate+'T00:00:00Z');
+ for(let days=0;remaining>0&&days<3660;days++,date.setUTCDate(date.getUTCDate()+1)){
+  if(date.getUTCDay()===0||date.getUTCDay()===6)continue;
+  const day=date.toISOString().slice(0,10),available=Math.max(0,worker.capacity-(loads.get(day)||0));
+  if(available<=0)continue;
+  const amount=Math.min(remaining,available);
+  planned.push({orderId:order.id,orderNo:order.orderNo,partCode:order.partCode,name:order.name,drawingNo:order.drawingNo,date:day,worker:worker.name,amount,capacity:worker.capacity,due:order.due,status:day<=order.due?'按期':'延期',reason:'订单人工指定；按正常班剩余产能顺延',candidates:[worker.name]});
+  remaining=amount===remaining?0:remaining-amount;
+ }
+ if(remaining>0)throw new Error('十年内无法安排完剩余工作量，请核对定额及人员能力；未保存任何调整');
+ return {allocations:[...others,...planned].sort((a,b)=>a.date.localeCompare(b.date)||a.worker.localeCompare(b.worker)),planned,required,finish:planned.at(-1)!.date,late:planned.at(-1)!.date>order.due};
+}
 export function recordCompletion<T extends Job>(order:T,done:number,by:string,reason:string,at:string):T{
  if(!(order.qty>0))throw new Error('订单数量须大于0，请先核实订单');
  if(!Number.isFinite(done)||done<0||done>order.qty)throw new Error('累计完成数量须在0至订单数量之间');

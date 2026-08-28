@@ -20,7 +20,7 @@ test('ambiguous legacy rows and empty reason are rejected',()=>{assert.throws(()
 test('reimport preserves assignment but accepts MES progress without manual completion',()=>{const old=assign().order;const result=preserveImportedCompletion([old],[{...order,done:3}]);assert.equal(result[0].done,3);assert.equal(result[0].workerAssignment.workerId,'b');assert.equal(preserveImportedCompletion(result,[{...order,done:4}])[0].done,4);assert.equal(preserveImportedCompletion([old],[])[0],old);const cleared=assign('').order;assert.equal(orderCandidates(preserveImportedCompletion([cleared],[order])[0],part,workers)[0].id,'a')});
 const source=readFileSync(new URL('../app/scheduler-app.tsx',import.meta.url),'utf8');
 function assignmentUi(){
- const ui={Error,data:{workers,parts:[part],orders:[order],allocations:rows,history:[{allocations:rows}]},assignmentSaving:false,assignmentForm:{workerId:'',reason:'',transfer:false},assigning:null,sessionInfo:{displayName:'负责人'},today:()=> '2026-08-28',window:{confirm:()=>true},isExternal:()=>false,...rulesModule.exports,
+ const ui={Error,data:{workers,parts:[part],orders:[order],allocations:rows,history:[{allocations:rows}]},rescheduleAssignment:false,setRescheduleAssignment:value=>{ui.rescheduleAssignment=value;},drawingFor:o=>o.drawingNo,assignmentSaving:false,assignmentForm:{workerId:'',reason:'',transfer:false},assigning:null,sessionInfo:{displayName:'负责人'},today:()=> '2026-08-28',window:{confirm:()=>true},isExternal:()=>false,...rulesModule.exports,
   setAssigning:value=>{ui.assigning=value;},setAssignmentForm:value=>{ui.assignmentForm=value;},setAssignmentError:value=>{ui.error=value;},setAssignmentSaving:value=>{ui.assignmentSaving=value;},persist:async next=>{ui.stored=JSON.stringify(next);return true;}};
  vm.createContext(ui);
  vm.runInContext(ts.transpileModule(source.slice(source.indexOf(' function beginAssignment('),source.indexOf(' function beginCompletion(')),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,ui);
@@ -62,3 +62,42 @@ test('single-row edit resolves displayed copy to stored row and saves correct em
 const context={orderCandidates,isExternal:p=>p?.processMode==='external',PLAN_DAYS:6,today:()=> '2026-09-01',addDay:s=>{const d=new Date(s+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)},workday:s=>{const d=new Date(s+'T00:00:00Z');while([0,6].includes(d.getUTCDay()))d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)}};
 vm.createContext(context);vm.runInContext(ts.transpileModule(source.slice(source.indexOf('function schedule('),source.indexOf('export default function SchedulerApp')),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
 test('actual scheduler retains order-specific choice across replan without changing same-part jobs',()=>{const result=context.schedule({workers,parts:[part],orders:[{...assign().order,due:'2026-09-10'},{...order,id:'o2',orderNo:'WO2',due:'2026-09-10'}]},false);assert.ok(result.allocations.some(a=>a.orderId==='o1'));assert.ok(result.allocations.filter(a=>a.orderId==='o1').every(a=>a.worker==='B'));assert.ok(result.allocations.filter(a=>a.orderId==='o2').every(a=>a.worker==='A'));assert.equal(result.allocations.reduce((n,a)=>n+a.amount,0),200)});
+
+const transferRows=rows.map(r=>({...r,name:'拉杆',due:'2026-09-02',status:'按期'}));
+const transfer=(overrides={})=>rulesModule.exports.planOrderTransfer({...order,due:'2026-09-02',...overrides},[order],transferRows,workers,'b',10,'2026-09-01');
+test('deferred transfer fills only free normal capacity and preserves other orders',()=>{
+ const result=transfer();assert.equal(result.required,100);assert.equal(result.planned[0].amount,70);assert.equal(result.planned[1].amount,30);assert.equal(result.finish,'2026-09-02');assert.equal(result.late,false);
+ assert.equal(result.allocations.find(a=>a.orderId==='o2'),transferRows[1]);assert.equal(result.allocations.filter(a=>a.orderId==='o1').reduce((n,a)=>n+a.amount,0),100);
+ assert.equal(transferRows[0].worker,'A');assert.ok(result.planned.every(a=>a.worker==='B'&&a.capacity===100));
+});
+test('deferred transfer covers shortages beyond six days and marks overdue rows',()=>{
+ const result=transfer({qty:100});assert.equal(result.planned.reduce((n,a)=>n+a.amount,0),1000);assert.ok(result.planned.length>6);assert.equal(result.late,true);assert.ok(result.planned.some(a=>a.status==='延期'));
+ assert.ok(result.planned.every(a=>![0,6].includes(new Date(a.date+'T00:00:00Z').getUTCDay())));
+});
+test('partial completion and assigning the same employee do not double count old allocations',()=>{
+ const result=rulesModule.exports.planOrderTransfer({...order,done:6,due:'2026-09-02'},[order],transferRows,workers,'a',10,'2026-08-29');
+ assert.equal(result.required,40);assert.equal(result.planned.length,1);assert.equal(result.planned[0].date,'2026-08-31');assert.equal(result.planned[0].amount,40);
+});
+test('fully occupied or already overloaded days are skipped without moving existing work',()=>{
+ const occupied=transferRows.map(r=>r.orderId==='o2'?{...r,amount:130}:r);
+ const result=rulesModule.exports.planOrderTransfer({...order,due:'2026-09-01'},[order],occupied,workers,'b',10,'2026-09-01');
+ assert.equal(result.planned[0].date,'2026-09-02');assert.equal(result.late,true);
+ assert.equal(result.allocations.find(a=>a.orderId==='o2'),occupied[1]);
+});
+test('invalid inputs and ambiguous legacy rows fail without returning partial plans',()=>{
+ const plan=rulesModule.exports.planOrderTransfer;
+ for(const unit of [0,NaN,Infinity])assert.throws(()=>plan({...order,due:'2026-09-02'},[order],transferRows,workers,'b',unit,'2026-09-01'));
+ assert.throws(()=>plan({...order,due:'2026-02-30'},[order],transferRows,workers,'b',10,'2026-09-01'),/日期/);
+ assert.throws(()=>plan({...order,due:'2026-09-02'},[order],transferRows,workers,'missing',10,'2026-09-01'),/日产能/);
+ assert.throws(()=>plan({...order,due:'2026-09-02'},[order,{...order,id:'dup'}],transferRows.map(r=>({...r,orderId:undefined})),workers,'b',10,'2026-09-01'),/唯一/);
+ assert.throws(()=>transfer({qty:1e10}),/十年/);
+});
+test('deferred save requires confirmation and persists complete plan without changing historical snapshots',async()=>{
+ const ui=assignmentUi();ui.data.allocations=transferRows;ui.data.orders=[{...order,due:'2026-09-02'}];ui.data.scheduleShortages=[{orderId:'o1'},{orderId:'o2'}];
+ ui.beginAssignment(ui.data.orders[0]);ui.rescheduleAssignment=true;ui.assignmentForm={workerId:'b',reason:'仅此员工可加工',transfer:true};
+ ui.window.confirm=()=>false;await ui.saveAssignment({preventDefault(){}});assert.equal(ui.stored,undefined);
+ let message='';ui.window.confirm=text=>{message=text;return true;};await ui.saveAssignment({preventDefault(){}});
+ assert.equal(ui.error,'');assert.match(message,/预计/);
+ const reloaded=JSON.parse(ui.stored);assert.equal(reloaded.orders[0].workerAssignment.workerId,'b');assert.equal(reloaded.allocations.filter(a=>a.orderId==='o1').reduce((n,a)=>n+a.amount,0),100);assert.ok(reloaded.allocations.filter(a=>a.orderId==='o1').every(a=>a.worker==='B'));
+ assert.deepEqual(reloaded.scheduleShortages,[{orderId:'o2'}]);assert.equal(reloaded.history[0].allocations[0].worker,'A');
+});
