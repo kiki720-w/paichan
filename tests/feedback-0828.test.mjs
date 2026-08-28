@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import ts from 'typescript';
 import vm from 'node:vm';
 const rulesModule={exports:{}};
-vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../app/feedback-rules.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:rulesModule.exports,module:rulesModule});
+vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../app/feedback-rules.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:rulesModule.exports,module:rulesModule,Error});
 const {matchesOrderSearch,orderCandidates,assignOrderWorker,preserveImportedCompletion}=rulesModule.exports;
 const workers=[{id:'a',name:'A',active:true,skills:['拉杆'],capacity:100,overtime:120},{id:'b',name:'B',active:true,skills:['专线拉杆'],capacity:100,overtime:120}];
 const order={id:'o1',orderNo:'WO1',partCode:'P1',name:'拉杆',drawingNo:'001-Ab',qty:10,done:0,status:'待排'};
@@ -19,6 +19,39 @@ test('transfer enforces aggregate daily upper bound and does not double count ex
 test('ambiguous legacy rows and empty reason are rejected',()=>{assert.throws(()=>assignOrderWorker(order,[order,{...order,id:'o2'}],[{...rows[0],orderId:undefined}],workers,'b','原因','人','now',true),/唯一/);assert.throws(()=>assignOrderWorker(order,[order],rows,workers,'b',' ','人','now',false),/原因/)});
 test('reimport preserves assignment but accepts MES progress without manual completion',()=>{const old=assign().order;const result=preserveImportedCompletion([old],[{...order,done:3}]);assert.equal(result[0].done,3);assert.equal(result[0].workerAssignment.workerId,'b');assert.equal(preserveImportedCompletion(result,[{...order,done:4}])[0].done,4);assert.equal(preserveImportedCompletion([old],[])[0],old);const cleared=assign('').order;assert.equal(orderCandidates(preserveImportedCompletion([cleared],[order])[0],part,workers)[0].id,'a')});
 const source=readFileSync(new URL('../app/scheduler-app.tsx',import.meta.url),'utf8');
+function assignmentUi(){
+ const ui={Error,data:{workers,parts:[part],orders:[order],allocations:rows,history:[{allocations:rows}]},assignmentSaving:false,assignmentForm:{workerId:'',reason:'',transfer:false},assigning:null,sessionInfo:{displayName:'负责人'},today:()=> '2026-08-28',window:{confirm:()=>true},isExternal:()=>false,...rulesModule.exports,
+  setAssigning:value=>{ui.assigning=value;},setAssignmentForm:value=>{ui.assignmentForm=value;},setAssignmentError:value=>{ui.error=value;},setAssignmentSaving:value=>{ui.assignmentSaving=value;},persist:async next=>{ui.stored=JSON.stringify(next);return true;}};
+ vm.createContext(ui);
+ vm.runInContext(ts.transpileModule(source.slice(source.indexOf(' function beginAssignment('),source.indexOf(' function beginCompletion(')),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,ui);
+ return ui;
+}
+test('order assignment defaults to immediate transfer when an existing plan is present',()=>{
+ const ui=assignmentUi();ui.beginAssignment(order);
+ assert.equal(ui.assignmentForm.transfer,true);assert.equal(ui.assignmentForm.workerId,'a');
+ ui.data.allocations=[];ui.beginAssignment(order);assert.equal(ui.assignmentForm.transfer,false);
+});
+test('save handler serializes immediate transfer so reloaded state retains worker and history',async()=>{
+ const ui=assignmentUi();ui.beginAssignment(order);ui.assignmentForm={...ui.assignmentForm,workerId:'b',reason:'人员调整'};
+ await ui.saveAssignment({preventDefault(){}});
+ assert.equal(ui.error,'');assert.equal(ui.assigning,null);
+ const reloaded=JSON.parse(ui.stored);
+ assert.equal(reloaded.orders[0].workerAssignment.workerId,'b');
+ assert.equal(reloaded.allocations[0].worker,'B');assert.equal(reloaded.allocations[0].date,rows[0].date);assert.equal(reloaded.allocations[0].amount,40);
+ assert.deepEqual(reloaded.allocations[1],rows[1]);assert.equal(reloaded.history[0].allocations[0].worker,'A');
+});
+test('future-only mode requires explicit confirmation and never claims current plan was updated',async()=>{
+ const ui=assignmentUi();ui.beginAssignment(order);ui.assignmentForm={workerId:'b',reason:'下次调整',transfer:false};
+ let prompt='';ui.window.confirm=message=>{prompt=message;return false;};
+ await ui.saveAssignment({preventDefault(){}});assert.match(prompt,/当前排产中的员工不会改变/);assert.equal(ui.stored,undefined);
+ ui.window.confirm=()=>true;await ui.saveAssignment({preventDefault(){}});
+ const reloaded=JSON.parse(ui.stored);assert.equal(reloaded.orders[0].workerAssignment.workerId,'b');assert.equal(reloaded.allocations[0].worker,'A');
+});
+test('failed save or over-capacity transfer stays open and never silently falls back to future-only',async()=>{
+ const ui=assignmentUi();ui.beginAssignment(order);ui.assignmentForm={workerId:'b',reason:'调整',transfer:true};
+ ui.persist=async()=>false;await ui.saveAssignment({preventDefault(){}});assert.match(ui.error,/未保存/);assert.notEqual(ui.assigning,null);
+ ui.data.workers=workers.map(w=>({...w,overtime:10}));await ui.saveAssignment({preventDefault(){}});assert.match(ui.error,/超过/);assert.equal(ui.assignmentForm.transfer,true);
+});
 test('single-row edit resolves displayed copy to stored row and saves correct employee',async()=>{
  const state={workers,parts:[part],orders:[order],allocations:rows,scheduleShortages:[]};const displayed=rows.map(r=>({...r,drawingNo:'001-Ab'}));let saved;
  const answers=['图纸已核对','负责人','2026-09-01','B','40'];
