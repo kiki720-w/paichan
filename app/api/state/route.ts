@@ -4,7 +4,14 @@ import {getSession,resolveFactory} from '../auth/access';
 type StateRow={data:string;revision:number};
 type SaveBody={state?:unknown;expectedRevision?:number;action?:string;summary?:string;restoreBackupId?:string};
 
-async function ensure(){
+const initialized=new WeakMap<object,Promise<void>>();
+function ensure(){
+ const db=env.DB;
+ let pending=initialized.get(db);
+ if(!pending){pending=initialize().catch(error=>{initialized.delete(db);throw error});initialized.set(db,pending)}
+ return pending;
+}
+async function initialize(){
  const db=env.DB;
  await db.batch([
   db.prepare(`CREATE TABLE IF NOT EXISTS factory_state (factory TEXT PRIMARY KEY CHECK(factory IN ('xian','xingping')), data TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, revision INTEGER NOT NULL DEFAULT 1)`),
@@ -18,10 +25,10 @@ async function ensure(){
  if(old)await db.prepare(`INSERT OR IGNORE INTO factory_state(factory,data,updated_at,revision) VALUES('xingping',?,CURRENT_TIMESTAMP,1)`).bind(old.data).run();
 }
 
-async function extras(factory:string){
+async function extras(factory:string,includeBackups=true){
  const [audit,backups]=await Promise.all([
   env.DB.prepare(`SELECT id,actor,action,summary,revision,created_at AS createdAt FROM factory_audit WHERE factory=? ORDER BY created_at DESC LIMIT 30`).bind(factory).all(),
-  env.DB.prepare(`SELECT id,actor,action,revision,created_at AS createdAt FROM factory_state_backup WHERE factory=? ORDER BY created_at DESC LIMIT 12`).bind(factory).all(),
+  includeBackups?env.DB.prepare(`SELECT id,actor,action,revision,created_at AS createdAt FROM factory_state_backup WHERE factory=? ORDER BY created_at DESC LIMIT 12`).bind(factory).all():Promise.resolve({results:[]}),
  ]);
  return {audit:audit.results,backups:backups.results};
 }
@@ -49,6 +56,9 @@ export async function PUT(req:Request){
   }else await env.DB.prepare(`INSERT INTO factory_state(factory,data,updated_at,revision) VALUES(?,?,CURRENT_TIMESTAMP,?)`).bind(factory,JSON.stringify(nextState),nextRevision).run();
   await env.DB.prepare(`INSERT INTO factory_audit(id,factory,actor,action,summary,revision,created_at) VALUES(?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),factory,actor,action,summary,nextRevision,now).run();
   await env.DB.prepare(`DELETE FROM factory_state_backup WHERE factory=? AND id NOT IN (SELECT id FROM factory_state_backup WHERE factory=? ORDER BY created_at DESC LIMIT 20)`).bind(factory,factory).run();
-  return Response.json({ok:true,factory,state:nextState,revision:nextRevision,...await extras(factory)});
+  // Old clients retain the full response. New clients already have the exact
+  // submitted state and need only a durable-write acknowledgement and audit.
+  const minimal=req.headers.get('prefer')==='return=minimal'&&!body.restoreBackupId;
+  return Response.json({ok:true,factory,...(minimal?{}:{state:nextState}),revision:nextRevision,...await extras(factory,!minimal)},{headers:{'Cache-Control':'private, no-store',...(minimal?{'Preference-Applied':'return=minimal'}:{})}});
  }catch(e){return Response.json({error:String(e)},{status:500})}
 }
