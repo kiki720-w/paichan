@@ -32,10 +32,46 @@ vm.createContext(engineContext);vm.runInContext(ts.transpileModule(engineSource,
 test('actual scheduler preserves six workdays, explicit assignment, quantity and drawing',()=>{const state={workers:[{...workers[0],capacity:50,overtime:60,name:'测试员'}],parts:[{...part('顶尖',['normal']),code:'P1',unit:10,drawingNo:'D-01'}],orders:[{...order,drawingNo:'ORDER-D'}]};const result=engineContext.schedule(state,false);assert.equal(result.allocations.length,2);assert.equal(result.allocations.reduce((n,a)=>n+a.amount,0),100);assert.ok(result.allocations.every(a=>a.worker==='测试员'&&a.drawingNo==='ORDER-D'&&a.orderId==='o1'));assert.equal(result.shortages.length,0);});
 test('actual scheduler only schedules remaining quantity and excludes fully completed jobs',()=>{const state={workers:[{...workers[0],capacity:50,overtime:60,name:'测试员'}],parts:[{...part('顶尖'),code:'P1',unit:10}],orders:[recordCompletion(order,4,'人','登记','now')]};assert.equal(engineContext.schedule(state).allocations.reduce((n,a)=>n+a.amount,0),60);state.orders=[recordCompletion(order,10,'人','登记','now')];assert.equal(engineContext.schedule(state).allocations.length,0);assert.equal(engineContext.schedule(state).shortages.length,0);});
 test('actual scheduler keeps shortage reporting and daily capacity bounds',()=>{const state={workers:[{...workers[0],capacity:10,overtime:12,name:'测试员'}],parts:[{...part('顶尖'),code:'P1',unit:10}],orders:[order]};const result=engineContext.schedule(state);assert.equal(result.allocations.length,6);assert.ok(result.allocations.every(a=>a.amount<=10));assert.equal(result.shortages[0].remainingWork,40);assert.equal(result.shortages[0].remainingQty,4);});
-test('weekly and daily tables render drawing and completion controls without changing history controls',()=>{
- const ui={React,completionStatus,allocationBelongsTo:rulesModule.exports.allocationBelongsTo,PLAN_DAYS:6,formatLocalDate:d=>d.toISOString().slice(0,10),addDay:(s,n=1)=>{const d=new Date(s+'T00:00:00');d.setDate(d.getDate()+n);return d.toISOString().slice(0,10)}};
+const ui={React,useRef:React.useRef,completionStatus,allocationBelongsTo:rulesModule.exports.allocationBelongsTo,PLAN_DAYS:6,formatLocalDate:d=>d.toISOString().slice(0,10),addDay:(s,n=1)=>{const d=new Date(s+'T00:00:00');d.setDate(d.getDate()+n);return d.toISOString().slice(0,10)}};
  vm.createContext(ui);vm.runInContext(ts.transpileModule(appSource.slice(appSource.indexOf('function ShortagePanel(')),{fileName:'components.tsx',compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React}}).outputText,ui);
+test('weekly and daily tables render drawing and completion controls without changing history controls',()=>{
  const rows=[{orderId:'o1',orderNo:'WO-1',partCode:'P1',name:'顶尖',drawingNo:'D-001',date:'2026-08-27',worker:'测试员',amount:40,capacity:50,due:'2026-09-01',status:'按期'}];
- for(const C of [ui.WeeklySchedule,ui.GroupedSchedule]){const html=renderToStaticMarkup(React.createElement(C,{rows,orders:[order],onEdit:()=>{},onComplete:()=>{}}));assert.match(html,/D-001/);assert.match(html,/登记完工/);assert.match(html,/未开工/);assert.match(html,/人工调整/);}
- const history=renderToStaticMarkup(React.createElement(ui.GroupedSchedule,{rows}));assert.doesNotMatch(history,/登记完工|人工调整/);assert.match(history,/D-001/);
+ for(const C of [ui.WeeklySchedule,ui.GroupedSchedule]){const html=renderToStaticMarkup(React.createElement(C,{rows,orders:[order],onEdit:()=>{},onComplete:()=>{}}));assert.match(html,/D-001/);assert.match(html,/登记完工/);assert.match(html,/未开工/);assert.match(html,/人工调整/);assert.match(html,/aria-label="人员排产明细" tabindex="0"/);assert.match(html,/人员排产明细向右滚动/);}
+ for(const C of [ui.WeeklySchedule,ui.GroupedSchedule]){const html=renderToStaticMarkup(React.createElement(C,{rows,onAssign:()=>{}}));assert.match(html,/更换员工/);assert.match(html,/schedule-worker-cell/);}
+ const history=renderToStaticMarkup(React.createElement(ui.GroupedSchedule,{rows}));assert.doesNotMatch(history,/登记完工|人工调整|更换员工/);assert.match(history,/D-001/);
+});
+
+test('order search renders a compact labelled field, result count, clear action and empty matches',()=>{
+ for(const [value,matched] of [['',12],['D-001',3],['not-found',0]]){
+  const html=renderToStaticMarkup(React.createElement(ui.OrderSearch,{value,total:12,matched,onChange:()=>{}}));
+  assert.match(html,/role="search"/);
+  assert.match(html,/for="order-search-input"/);
+  assert.match(html,/aria-live="polite"/);
+  if(value){assert.match(html,/aria-label="清除搜索"/);assert.ok(html.includes(`<strong>${matched}</strong>`));}
+  else{assert.doesNotMatch(html,/aria-label="清除搜索"/);assert.match(html,/共 <strong>12<\/strong> 项订单/);}
+ }
+});
+test('scroll buttons move the table viewport both ways and respect reduced motion',()=>{
+ const calls=[];
+ const element={clientWidth:800,scrollBy:options=>calls.push(options)};
+ ui.useRef=()=>({current:element});
+ let reduced=false;
+ ui.window={matchMedia:()=>({matches:reduced})};
+ try{
+  const tree=ui.ScrollableTable({label:'人员排产明细',children:null});
+  const buttons=tree.props.children[0].props.children[1].props.children;
+  buttons[0].props.onClick();buttons[1].props.onClick();
+  assert.deepEqual(calls.map(x=>x.left),[-600,600]);
+  assert.equal(calls[0].behavior,'smooth');
+  reduced=true;buttons[1].props.onClick();assert.equal(calls[2].behavior,'instant');
+ }finally{ui.useRef=React.useRef;}
+});
+test('clearing the order search resets the filter and restores input focus',()=>{
+ let value='D-001',focused=false;
+ ui.useRef=()=>({current:{focus:()=>{focused=true;}}});
+ try{
+  const tree=ui.OrderSearch({value,total:12,matched:3,onChange:next=>{value=next;}});
+  tree.props.children[0].props.children[1].props.children[2].props.onClick();
+  assert.equal(value,'');assert.equal(focused,true);
+ }finally{ui.useRef=React.useRef;}
 });
