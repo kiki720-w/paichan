@@ -87,7 +87,7 @@ export function planOrderTransfer<A extends {orderId?:string;orderNo:string;part
  let remaining=required;
  const date=new Date(startDate+'T00:00:00Z');
  for(let days=0;remaining>0&&days<3660;days++,date.setUTCDate(date.getUTCDate()+1)){
-  if(date.getUTCDay()===0||date.getUTCDay()===6)continue;
+  if(date.getUTCDay()===0)continue;
   const day=date.toISOString().slice(0,10),available=Math.max(0,worker.capacity-(loads.get(day)||0));
   if(available<=0)continue;
   const amount=Math.min(remaining,available);

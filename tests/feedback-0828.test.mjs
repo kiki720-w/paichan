@@ -59,9 +59,13 @@ test('single-row edit resolves displayed copy to stored row and saves correct em
  vm.createContext(ui);vm.runInContext(ts.transpileModule(source.split(/\r?\n/).find(l=>l.includes('async function editAllocation(')),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,ui);
  await ui.editAllocation(displayed[0]);assert.equal(saved.allocations[0].worker,'B');assert.equal(saved.allocations[0].amount,40);assert.equal(saved.allocations[1],rows[1]);assert.equal(rows[0].worker,'A');
 });
-const context={orderCandidates,isExternal:p=>p?.processMode==='external',PLAN_DAYS:6,today:()=> '2026-09-01',addDay:s=>{const d=new Date(s+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)},workday:s=>{const d=new Date(s+'T00:00:00Z');while([0,6].includes(d.getUTCDay()))d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)}};
+const context={orderCandidates,isExternal:p=>p?.processMode==='external',PLAN_DAYS:6,today:()=> '2026-09-01',addDay:s=>{const d=new Date(s+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)},workday:s=>{const d=new Date(s+'T00:00:00Z');while(d.getUTCDay()===0)d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)}};
 vm.createContext(context);vm.runInContext(ts.transpileModule(source.slice(source.indexOf('function schedule('),source.indexOf('export default function SchedulerApp')),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
 test('actual scheduler retains order-specific choice across replan without changing same-part jobs',()=>{const result=context.schedule({workers,parts:[part],orders:[{...assign().order,due:'2026-09-10'},{...order,id:'o2',orderNo:'WO2',due:'2026-09-10'}]},false);assert.ok(result.allocations.some(a=>a.orderId==='o1'));assert.ok(result.allocations.filter(a=>a.orderId==='o1').every(a=>a.worker==='B'));assert.ok(result.allocations.filter(a=>a.orderId==='o2').every(a=>a.worker==='A'));assert.equal(result.allocations.reduce((n,a)=>n+a.amount,0),200)});
+test('actual six-day scheduler includes Saturday between Friday and Monday',()=>{
+ context.today=()=> '2026-09-04';const result=context.schedule({workers:[{...workers[0],capacity:50,name:'A'}],parts:[{...part,workers:['a']}],orders:[{...order,qty:15,due:'2026-09-20'}]},false);
+ assert.equal(result.allocations.slice(0,3).map(a=>a.date).join(','),'2026-09-04,2026-09-05,2026-09-07');assert.ok(result.allocations.every(a=>a.date!=='2026-09-06'));
+});
 
 const transferRows=rows.map(r=>({...r,name:'拉杆',due:'2026-09-02',status:'按期'}));
 const transfer=(overrides={})=>rulesModule.exports.planOrderTransfer({...order,due:'2026-09-02',...overrides},[order],transferRows,workers,'b',10,'2026-09-01');
@@ -72,11 +76,16 @@ test('deferred transfer fills only free normal capacity and preserves other orde
 });
 test('deferred transfer covers shortages beyond six days and marks overdue rows',()=>{
  const result=transfer({qty:100});assert.equal(result.planned.reduce((n,a)=>n+a.amount,0),1000);assert.ok(result.planned.length>6);assert.equal(result.late,true);assert.ok(result.planned.some(a=>a.status==='延期'));
- assert.ok(result.planned.every(a=>![0,6].includes(new Date(a.date+'T00:00:00Z').getUTCDay())));
+ assert.ok(result.planned.every(a=>new Date(a.date+'T00:00:00Z').getUTCDay()!==0));
+});
+test('Saturday is a normal production day and Sunday remains closed',()=>{
+ const plan=rulesModule.exports.planOrderTransfer({...order,qty:25,due:'2026-09-12'},[order],[],workers,'b',10,'2026-09-04');
+ assert.equal(plan.planned.slice(0,3).map(a=>a.date).join(','),'2026-09-04,2026-09-05,2026-09-07');
+ assert.ok(plan.planned.some(a=>a.date==='2026-09-05'));assert.ok(plan.planned.every(a=>a.date!=='2026-09-06'));
 });
 test('partial completion and assigning the same employee do not double count old allocations',()=>{
  const result=rulesModule.exports.planOrderTransfer({...order,done:6,due:'2026-09-02'},[order],transferRows,workers,'a',10,'2026-08-29');
- assert.equal(result.required,40);assert.equal(result.planned.length,1);assert.equal(result.planned[0].date,'2026-08-31');assert.equal(result.planned[0].amount,40);
+ assert.equal(result.required,40);assert.equal(result.planned.length,1);assert.equal(result.planned[0].date,'2026-08-29');assert.equal(result.planned[0].amount,40);
 });
 test('fully occupied or already overloaded days are skipped without moving existing work',()=>{
  const occupied=transferRows.map(r=>r.orderId==='o2'?{...r,amount:130}:r);
