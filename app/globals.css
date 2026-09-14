@@ -41,3 +41,28 @@
 .table-scroll-viewport>table{min-width:960px}
 .schedule-groups .table-scroll-viewport>table{min-width:1450px}
 .schedule-groups .table-scroll-tools{padding-left:10px;padding-right:10px}
+
+/* 2026 visual refresh: Carbon clarity with Airtable-style data controls. */
+:root{--ink:#161616;--muted:#5f6872;--line:#d9e0e7;--green:#0f62fe;--lime:#d6e4ff;--paper:#f4f7fb;--white:#fff;--red:#da1e28;--blue:#0f62fe;--blue-soft:#edf4ff;--success:#198754;--warning:#b26a00}
+body{background:var(--paper);font-family:Inter,"Microsoft YaHei",Arial,sans-serif}
+.shell{grid-template-columns:224px minmax(0,1fr)}
+aside{background:#17202a;padding:22px 14px;border-right:1px solid #263341}
+.brand{padding:0 10px 22px;border-bottom:1px solid #2b3744;margin-bottom:14px}
+.brand>span{background:var(--blue);color:#fff;border-radius:4px;width:40px;height:40px}
+.brand small{color:#91a0af}.side-note{background:#202c38;border-color:#344352;border-radius:6px}.side-note i{color:#9fc0ff}
+nav{gap:3px}nav button{display:flex;align-items:center;gap:11px;border-radius:4px;padding:11px 13px;color:#bdc7d2;font-weight:600}nav button:hover{background:#223141}nav button.active{background:#0f62fe;color:#fff;box-shadow:none}.nav-icon{width:20px;text-align:center;font-size:16px;color:inherit}
+.account-button{background:#202c38;border-color:#405064;border-radius:4px}.logout-button{border-radius:4px;box-shadow:none}
+main{padding:0 28px 48px}header{height:auto;min-height:92px;padding:18px 0;gap:18px;border-bottom:1px solid var(--line);margin-bottom:20px}header p{letter-spacing:.3px}h1{font-size:25px}.header-actions{flex-wrap:wrap;justify-content:flex-end}
+.primary,.import,.hero button{border-radius:4px;padding:10px 15px;min-height:40px}.primary{background:var(--blue)}.primary:hover{background:#0353e9}.import{border-color:#b8c3cf}.import:hover{background:#edf4ff;border-color:#8aaef2}
+.panel,.form-panel,.metric{border-radius:6px;border-color:var(--line);box-shadow:0 1px 2px #0b18280a}.panel{padding:20px}.cards{gap:12px}.metric{position:relative;padding:18px 20px;overflow:hidden}.metric:before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:#8aaef2}.metric.danger:before{background:var(--red)}.metric strong{font-size:28px}
+.panel-title{margin-bottom:16px}.panel-title h3{font-size:18px}.panel-title small{letter-spacing:.5px}
+.hero{background:#152b45;border-radius:6px}.hero:after{border-color:#244566}.hero span,.hero-stat strong{color:#8db6ff}.hero button{background:#0f62fe;color:white}
+table{font-size:12px}thead{background:#f5f7fa}th{height:42px;color:#46515c;font-size:10px;padding:10px 12px;border-bottom-color:#cbd4dd}td{height:46px;padding:10px 12px;border-bottom-color:#e6ebf0}tbody tr:hover{background:#f1f6ff}
+.ok,.late,.pending{border-radius:12px}.ok{background:#defbe6;color:#0e6027}.late{background:#fff1f1;color:#b81922}.pending{background:#edf1f5;color:#4c5967}.bar i{background:var(--blue)}
+.order-search-toolbar{margin:0;padding:14px 16px;background:#f7f9fc;border-color:#d8e0e8;border-radius:6px}.order-search-main{max-width:680px}.order-search-label{color:#34404c}.order-search-field{height:44px;border-radius:4px;border-color:#b8c4d0;box-shadow:none}.order-search-field:focus-within{border-color:var(--blue);box-shadow:inset 0 0 0 1px var(--blue)}.order-search-field button{background:var(--blue-soft);color:#0b55c9}.order-search-count{background:#e8eef5;color:#536170}.order-search-count strong{color:#0b55c9}
+.order-filter-chips{display:flex;align-items:center;gap:8px;overflow-x:auto;padding:12px 0 14px}.order-filter-chips button{display:flex;align-items:center;gap:8px;white-space:nowrap;border:1px solid #ccd5df;background:#fff;color:#46515c;border-radius:18px;padding:7px 12px;font-weight:700;cursor:pointer}.order-filter-chips button span{display:grid;place-items:center;min-width:20px;height:20px;padding:0 5px;border-radius:10px;background:#edf1f5;font-size:11px}.order-filter-chips button:hover{border-color:#8aaef2;background:#f5f8ff}.order-filter-chips button.active{background:#e8f1ff;border-color:#0f62fe;color:#074da5}.order-filter-chips button.active span{background:#0f62fe;color:#fff}
+.bulk-order-toolbar{margin:0 0 14px;border-radius:4px;border-color:#bed2f3;background:#edf4ff;padding:11px 13px}.bulk-order-toolbar span b{color:#0f62fe}.order-select-cell input{accent-color:#0f62fe}.order-row-selected{background:#eaf2ff!important}
+.schedule-edit-hint{border-radius:4px;border-left:3px solid #0f62fe;background:#edf4ff;color:#334b6a}.schedule-edit-hint button{color:#0f62fe}.change-worker-button{background:#0f62fe;border-color:#0f62fe;border-radius:4px}.change-worker-button:hover{background:#0353e9}
+.table-scroll-tools{padding:8px 4px;color:#596674}.table-scroll-tools button{border-radius:4px;color:#0f62fe}.table-scroll-tools button:hover{background:#edf4ff;border-color:#0f62fe}.table-scroll-viewport{scrollbar-color:#8ba4c2 #e8edf3}.table-scroll-viewport::-webkit-scrollbar-track{background:#e8edf3}.table-scroll-viewport::-webkit-scrollbar-thumb{background:#8ba4c2;border-color:#e8edf3}
+.form-panel{border-top:3px solid #0f62fe}.form-panel input,.form-panel select{border-radius:4px;background:#fff}.form-panel input:focus,.form-panel select:focus{outline:2px solid #0f62fe;outline-offset:-1px}
+@media(max-width:1000px){.shell{grid-template-columns:78px minmax(0,1fr)}nav button span:last-child{display:none}.nav-icon{font-size:18px}.side-user{display:none}}
