@@ -1,6 +1,7 @@
 // Customer feedback rules for drawing lookup, completion and order assignment.
 export type CompletionRecord={done:number;at:string;by:string;reason:string};
 export type WorkerAssignment={workerId:string;at:string;by:string;reason:string};
+export type HourTierRule={id:string;category:string;operator:'gt'|'lte';threshold:number;workerIds:string[];mode:'exclusive'|'preferred'};
 type Job={id:string;orderNo:string;partCode:string;name:string;qty:number;done:number;status:string;customer?:string;due?:string;drawingNo?:string;manualCompletion?:CompletionRecord;workerAssignment?:WorkerAssignment};
 type SkillWorker={id:string;name?:string;active:boolean;skills:string[]};
 type SkillPart={name:string;category:string;unit?:number;workers:string[];processMode?:string};
@@ -11,20 +12,9 @@ export function drawingFromRow(row:Record<string,unknown>){
  return '';
 }
 const normalized=(s:string)=>s.replace(/\s/g,'').trim();
-const workerBaseName=(name:string|undefined)=>text(name).replace(/[（(][^)）]+[)）]/g,'');
-const hourRuleRoster=['王超伟','杨战勋','郭涛','王双勃','杨超','王锦','马飞航'];
-export function workHourCandidateNames(part:SkillPart):string[]|null{
- const unit=Number(part.unit);if(!Number.isFinite(unit)||unit<=0)return null;
- const labels=[normalized(part.name),normalized(part.category)].filter(Boolean);
- if(labels.some(label=>label==='底座'||label.endsWith('底座')))return unit>35?['王超伟','杨战勋']:['郭涛'];
- if(labels.some(label=>label==='顶尖'||label.endsWith('顶尖')||/^顶尖[（(]/.test(label)))return unit>20?['王双勃']:['杨超','王锦','马飞航'];
- return null;
-}
 export function matchWorkers<T extends SkillWorker>(part:SkillPart,workers:T[]):T[]{
  if(part.processMode==='external')return [];
  if(part.workers.length)return workers.filter(w=>w.active&&part.workers.includes(w.id));
- const hourNames=workHourCandidateNames(part);
- if(hourNames&&workers.some(w=>hourRuleRoster.includes(workerBaseName(w.name))))return workers.filter(w=>w.active&&hourNames.includes(workerBaseName(w.name)));
  const labels=[normalized(part.name),normalized(part.category)].filter(Boolean);
  if(!labels.length)return [];
  // Customer-confirmed special product lines must never fall through to 拉杆.
@@ -47,14 +37,28 @@ export function orderCandidates<T extends SkillWorker>(order:Pick<Job,'workerAss
  const id=order.workerAssignment?.workerId;
  return id?workers.filter(w=>w.active&&w.id===id):matchWorkers(part,workers);
 }
+export function matchingHourTierRule(part:SkillPart,rules:HourTierRule[]=[]):HourTierRule|undefined{
+ const unit=Number(part.unit);if(!Number.isFinite(unit)||unit<=0)return;
+ const labels=[normalized(part.name),normalized(part.category)].filter(Boolean);
+ return rules.find(rule=>{const category=normalized(rule.category);if(!category||!labels.some(label=>label===category||label.endsWith(category)))return false;const threshold=Number(rule.threshold);return Number.isFinite(threshold)&&(rule.operator==='gt'?unit>threshold:unit<=threshold)});
+}
+export function rankedOrderCandidates<T extends SkillWorker>(order:Pick<Job,'workerAssignment'>,part:SkillPart,workers:T[],rules:HourTierRule[]=[]){
+ const assigned=order.workerAssignment?.workerId;
+ if(assigned)return {workers:orderCandidates(order,part,workers),preferredIds:new Set([assigned]),rule:undefined};
+ const base=matchWorkers(part,workers),rule=matchingHourTierRule(part,rules);
+ if(!rule)return {workers:base,preferredIds:new Set<string>(),rule:undefined};
+ const preferred=workers.filter(w=>w.active&&rule.workerIds.includes(w.id));
+ if(rule.mode==='exclusive')return {workers:preferred,preferredIds:new Set(preferred.map(w=>w.id)),rule};
+ return {workers:[...preferred,...base.filter(w=>!rule.workerIds.includes(w.id))],preferredIds:new Set(preferred.map(w=>w.id)),rule};
+}
 export function matchesOrderSearch(order:Pick<Job,'drawingNo'|'orderNo'|'partCode'|'name'>,partDrawing:string|undefined,query:string){
  const q=query.trim().toLocaleLowerCase();
  return !q||[order.drawingNo||partDrawing,order.orderNo,order.partCode,order.name].some(v=>String(v||'').toLocaleLowerCase().includes(q));
 }
-export function assignmentAwareIssues<T extends {key:string;reason:string}>(issues:T[],orders:Job[],parts:(SkillPart&{code:string})[],workers:SkillWorker[]):T[]{
+export function assignmentAwareIssues<T extends {key:string;reason:string}>(issues:T[],orders:Job[],parts:(SkillPart&{code:string})[],workers:SkillWorker[],rules:HourTierRule[]=[]):T[]{
  return issues.flatMap(issue=>{
   const order=orders.find(o=>o.id===issue.key),part=parts.find(p=>p.code===order?.partCode);
-  if(!order?.workerAssignment?.workerId||!part||!orderCandidates(order,part,workers).length)return [issue];
+  if(!order||!part||!rankedOrderCandidates(order,part,workers,rules).workers.length)return [issue];
   const reason=issue.reason.split('；').filter(r=>r!=='无人员匹配：未配置工件—人员关系').join('；');
   return reason?[{...issue,reason}]:[];
  });
