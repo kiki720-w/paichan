@@ -8,7 +8,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 const code=readFileSync(new URL('../app/feedback-rules.ts',import.meta.url),'utf8');
 const rulesModule={exports:{}};
 vm.runInNewContext(ts.transpileModule(code,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:rulesModule.exports,module:rulesModule});
-const {drawingFromRow,matchWorkers,orderCandidates,recordCompletion,preserveImportedCompletion,remainingAllocations,completionStatus}=rulesModule.exports;
+const {drawingFromRow,matchWorkers,workHourCandidateNames,orderCandidates,recordCompletion,preserveImportedCompletion,remainingAllocations,completionStatus}=rulesModule.exports;
 const plain=x=>JSON.parse(JSON.stringify(x));
 const workers=[{id:'normal',active:true,skills:['顶尖','本体','拉杆']},{id:'special',active:true,skills:['格里森拉杆','珩齿拉杆']},{id:'off',active:false,skills:['顶尖']}];
 const part=(name,ids=[])=>({name,category:name,workers:ids,processMode:'internal'});
@@ -18,6 +18,15 @@ test('drawing aliases preserve exact drawing, missing data stays empty',()=>{ass
 test('ordinary category matches top/bottom/alloy/tailstock centers and prefixed bodies',()=>{for(const n of ['顶尖','上顶尖','下顶尖','合金顶尖','尾架顶尖','夹具本体'])assert.deepEqual(ids(matchWorkers(part(n),workers)),['normal']);});
 test('special lines do not fall through to generic rod operators',()=>{for(const n of ['格里森拉杆','珩齿拉杆'])assert.deepEqual(ids(matchWorkers(part(n),workers)),['special']);assert.deepEqual(ids(matchWorkers(part('拉杆'),workers)),['normal']);assert.deepEqual(ids(matchWorkers(part('格里森拉杆'),[workers[0]])),[]);});
 test('explicit worker restriction is preserved and external/blank labels never match',()=>{assert.deepEqual(ids(matchWorkers(part('格里森拉杆',['normal']),workers)),['normal']);assert.deepEqual(ids(matchWorkers(part('顶尖',['off']),workers)),[]);assert.deepEqual(ids(matchWorkers({...part('顶尖'),processMode:'external'},workers)),[]);assert.deepEqual(ids(matchWorkers(part(''),workers)),[]);});
+test('Xingping base and center jobs use the confirmed inclusive hour boundaries',()=>{
+ const roster=['王超伟','杨战勋','郭涛（盘）','王双勃（轴）','杨超','王锦（盘）','马飞航（轴）'].map((name,index)=>({id:String(index),name,active:true,skills:['底座','顶尖']}));
+ const names=p=>matchWorkers({...part(p.name),category:p.category,unit:p.unit},roster).map(w=>w.name);
+ assert.deepEqual(names({name:'预置台底座',category:'底座',unit:35}),['郭涛（盘）']);
+ assert.deepEqual(names({name:'底座',category:'底座',unit:35.01}),['王超伟','杨战勋']);
+ assert.deepEqual(names({name:'上顶尖',category:'顶尖',unit:20}),['杨超','王锦（盘）','马飞航（轴）']);
+ assert.deepEqual(names({name:'顶尖',category:'顶尖',unit:20.01}),['王双勃（轴）']);
+ assert.equal(workHourCandidateNames({name:'普通工件',category:'其他',unit:99,workers:[]}),null);
+});
 test('completion handles partial/full/correction, rejects invalid totals and records actor',()=>{const partial=recordCompletion(order,4,'负责人','登记','now');assert.equal(completionStatus(partial),'部分完成');const full=recordCompletion(partial,10,'负责人','完成','now');assert.equal(full.status,'已完成');assert.equal(recordCompletion(full,2,'负责人','更正','now').done,2);for(const n of [-1,11,NaN,Infinity])assert.throws(()=>recordCompletion(order,n,'人','说明','now'));assert.throws(()=>recordCompletion(order,1,'人',' ','now'));assert.equal(partial.manualCompletion.by,'负责人');assert.equal(order.done,0);});
 test('MES reimport preserves manual totals rather than summing or overwriting',()=>{const old=recordCompletion(order,4,'人','说明','now');for(const done of [0,4,8]){const merged=preserveImportedCompletion([old],[{...order,done}]);assert.equal(merged[0].done,4);assert.deepEqual(plain(preserveImportedCompletion(merged,[{...order,done}])),plain(merged));}assert.equal(preserveImportedCompletion([recordCompletion(order,10,'人','完成','now')],[order])[0].status,'已完成');});
 test('import does not discard manual records absent from snapshot; invalid quantity fails',()=>{const old=recordCompletion(order,4,'人','说明','now');assert.equal(preserveImportedCompletion([old],[]).length,1);assert.throws(()=>preserveImportedCompletion([old],[{...order,qty:3}]));});

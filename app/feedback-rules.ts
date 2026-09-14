@@ -2,8 +2,8 @@
 export type CompletionRecord={done:number;at:string;by:string;reason:string};
 export type WorkerAssignment={workerId:string;at:string;by:string;reason:string};
 type Job={id:string;orderNo:string;partCode:string;name:string;qty:number;done:number;status:string;customer?:string;due?:string;drawingNo?:string;manualCompletion?:CompletionRecord;workerAssignment?:WorkerAssignment};
-type SkillWorker={id:string;active:boolean;skills:string[]};
-type SkillPart={name:string;category:string;workers:string[];processMode?:string};
+type SkillWorker={id:string;name?:string;active:boolean;skills:string[]};
+type SkillPart={name:string;category:string;unit?:number;workers:string[];processMode?:string};
 const text=(v:unknown)=>String(v??'').trim();
 export function drawingFromRow(row:Record<string,unknown>){
  const names=new Set(['图号','图纸编号','图纸号','零件图号','产品图号','图号(drawingno)','图号(drawingnumber)']);
@@ -11,9 +11,20 @@ export function drawingFromRow(row:Record<string,unknown>){
  return '';
 }
 const normalized=(s:string)=>s.replace(/\s/g,'').trim();
+const workerBaseName=(name:string|undefined)=>text(name).replace(/[（(][^)）]+[)）]/g,'');
+const hourRuleRoster=['王超伟','杨战勋','郭涛','王双勃','杨超','王锦','马飞航'];
+export function workHourCandidateNames(part:SkillPart):string[]|null{
+ const unit=Number(part.unit);if(!Number.isFinite(unit)||unit<=0)return null;
+ const labels=[normalized(part.name),normalized(part.category)].filter(Boolean);
+ if(labels.some(label=>label==='底座'||label.endsWith('底座')))return unit>35?['王超伟','杨战勋']:['郭涛'];
+ if(labels.some(label=>label==='顶尖'||label.endsWith('顶尖')||/^顶尖[（(]/.test(label)))return unit>20?['王双勃']:['杨超','王锦','马飞航'];
+ return null;
+}
 export function matchWorkers<T extends SkillWorker>(part:SkillPart,workers:T[]):T[]{
  if(part.processMode==='external')return [];
  if(part.workers.length)return workers.filter(w=>w.active&&part.workers.includes(w.id));
+ const hourNames=workHourCandidateNames(part);
+ if(hourNames&&workers.some(w=>hourRuleRoster.includes(workerBaseName(w.name))))return workers.filter(w=>w.active&&hourNames.includes(workerBaseName(w.name)));
  const labels=[normalized(part.name),normalized(part.category)].filter(Boolean);
  if(!labels.length)return [];
  // Customer-confirmed special product lines must never fall through to 拉杆.
