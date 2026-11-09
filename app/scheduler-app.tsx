@@ -5,21 +5,25 @@ import {MioraLogin, MioraShell} from './miora-shell';
 import {MioraDashboard, MioraGuide, MioraProductMap} from './miora-workspace';
 import {currentPlanSnapshot, MioraPlan} from './miora-plan';
 import {buildDailyDispatch} from './dispatch-export';
+import {buildOrderTemplate} from './order-template';
+import {MioraGapDialog} from './miora-gap-dialog';
+import {setDispatchSlot,shiftDispatchSlot,validateWorkingWindows,type previewBatchGaps} from './scheduling-operations';
+import type {MesSyncState} from './server/mes-source';
 import {drawingFromRow,orderDataProblems,matchWorkers,rankedOrderCandidates,completionStatus,recordCompletion,preserveImportedCompletion,allocationBelongsTo,remainingAllocations,assignmentAwareIssues,matchesOrderSearch,assignOrderWorker,planOrderTransfer,type HourTierRule,type WorkerAssignment,type CompletionRecord} from './feedback-rules';
 
 type Worker={id:string;name:string;team:string;capacity:number;overtime:number;skills:string[];active:boolean};
 type Part={drawingNo?:string,id:string,code:string,name:string,category:string,unit:number,workers:string[],operationCode?:string,processMode?:'internal'|'external'};
 type Order={workerAssignment?:WorkerAssignment,drawingNo?:string,manualCompletion?:CompletionRecord,id:string,orderNo:string,customer:string,partCode:string,name:string,qty:number,done:number,due:string,priority:number,status:string};
-type Allocation={orderId?:string,drawingNo?:string,date:string,worker:string,orderNo:string,partCode:string,name:string,amount:number,capacity:number,due:string,status:string,reason?:string,candidates?:string[]};
+export type Allocation={orderId?:string,drawingNo?:string,date:string,worker:string,orderNo:string,partCode:string,name:string,amount:number,capacity:number,due:string,status:string,reason?:string,candidates?:string[],startTime?:string,endTime?:string};
 type ImportIssue={key:string,orderNo?:string,partCode:string,name:string,reason:string};
 type PlanStatus='草稿'|'已确认'|'已发布'|'已撤回'|'已变更';
-type ScheduleShortage={orderId?:string;drawingNo?:string;orderNo:string;partCode:string;name:string;due:string;requiredWork:number;scheduledWork:number;remainingWork:number;remainingQty:number;suggestedWorker?:string;estimatedFinish?:string;reason:string};
+export type ScheduleShortage={orderId?:string;drawingNo?:string;orderNo:string;partCode:string;name:string;due:string;requiredWork:number;scheduledWork:number;remainingWork:number;remainingQty:number;suggestedWorker?:string;estimatedFinish?:string;reason:string};
 type ScheduleHistory={id:string;createdAt:string;label:string;allocations:Allocation[];status?:PlanStatus;confirmedBy?:string;publishedAt?:string;publishedBy?:string;withdrawnAt?:string;withdrawnBy?:string;changeNote?:string};
 type AuditEntry={id:string;actor:string;action:string;summary:string;createdAt:string;revision:number};
 type ProcessTask={drawingNo?:string,id:string,workOrderNo:string,planNo:string,partCode:string,partName:string,route:string,operationNo:string,operationName:string,plannedQty:number,completedQty:number,remainingQty:number,due:string,status:string,lastReportAt?:string,producers?:string[],unitTime?:number};
 type SkillEvidence={person:string,partCode:string,operation:string,count:number,lastAt:string,avgUnitTime:number};
 type ImportBatch={id:string,fileName:string,type:string,importedAt:string,rows:number,note:string};
-type AppState={workers:Worker[],parts:Part[],orders:Order[],allocations:Allocation[],lastRun:string,issues?:ImportIssue[],importedAt?:string,history?:ScheduleHistory[],processTasks?:ProcessTask[],skillEvidence?:SkillEvidence[],importLog?:ImportBatch[],scheduleShortages?:ScheduleShortage[],hourTierRules?:HourTierRule[],planStatus?:PlanStatus,planSnapshotId?:string,planUpdatedAt?:string,planUpdatedBy?:string,planChangeNote?:string};
+export type AppState={workers:Worker[],parts:Part[],orders:Order[],allocations:Allocation[],lastRun:string,issues?:ImportIssue[],importedAt?:string,history?:ScheduleHistory[],processTasks?:ProcessTask[],skillEvidence?:SkillEvidence[],importLog?:ImportBatch[],scheduleShortages?:ScheduleShortage[],hourTierRules?:HourTierRule[],planStatus?:PlanStatus,planSnapshotId?:string,planUpdatedAt?:string,planUpdatedBy?:string,planChangeNote?:string,workingWindows?:string,mesSync?:MesSyncState['mesSync']};
 type Factory='xian'|'xingping';
 type SessionInfo={role:'main'|'factory';factory?:Factory;displayName:string};
 type FactorySummary={orders:number;workers:number;parts:number;allocations:number;lastRun:string};
@@ -122,10 +126,10 @@ const guideSteps=[
  {tab:'排产结果',title:'生成、确认与发布计划',body:'生成车工计划后可切换周计划或每日派工，核对后确认并发布，也可以导出 Excel。',tip:'产能缺口直接列出，请先核对六天内未排完的工作。'},
 ] as const;
 const matchingWorkers=(part:Part,workers:Worker[])=>matchWorkers(part,workers);
-const factoryFromRows=(rows:Record<string,unknown>[]):Factory|null=>{
+const factoryFromRows=(rows:Record<string,unknown>[]):Factory|'mixed'|null=>{
  const fields=['责任单位','计划编制部门','生产车间(选择)','所属工厂','工厂'];let xian=0,xingping=0;
  for(const row of rows)for(const key of fields){const value=clean(row[key]);if(/西安/.test(value))xian++;if(/兴平/.test(value))xingping++}
- return xian&&!xingping?'xian':xingping&&!xian?'xingping':null
+ return xian&&xingping?'mixed':xian?'xian':xingping?'xingping':null
 };
 
 const mergeOfficialWorkers=(workers:Worker[]=[])=>{
@@ -194,6 +198,7 @@ export default function SchedulerApp(){
  const [orderSearch,setOrderSearch]=useState('');
  const [orderFilter,setOrderFilter]=useState<'all'|'pending'|'active'|'risk'|'complete'|'review'>('all');
  const [newOrderOpen,setNewOrderOpen]=useState(false),[importing,setImporting]=useState(false),[resultDay,setResultDay]=useState('');
+ const [batchGapsOpen,setBatchGapsOpen]=useState(false);
  const [newOrderError,setNewOrderError]=useState('');
  const pendingSaves=useRef(0),refreshInProgress=useRef(false);
  const [selectedOrderIds,setSelectedOrderIds]=useState<string[]>([]),[bulkAssigning,setBulkAssigning]=useState(false),[bulkAssignmentForm,setBulkAssignmentForm]=useState({workerId:'',reason:''}),[bulkAssignmentError,setBulkAssignmentError]=useState(''),[bulkAssignmentSaving,setBulkAssignmentSaving]=useState(false);
@@ -229,7 +234,7 @@ export default function SchedulerApp(){
  async function changePassword(e:React.FormEvent){e.preventDefault();setPasswordError('');if(passwordForm.newPassword!==passwordForm.confirmPassword){setPasswordError('两次输入的新密码不一致');return}if(passwordForm.newPassword.length<8){setPasswordError('新密码至少需要8位');return}const r=await fetch('/api/auth/change-password',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({currentPassword:passwordForm.currentPassword,newPassword:passwordForm.newPassword})}),x=await r.json();if(!r.ok){setPasswordError(x.error||'密码修改失败');return}setPasswordDialog(false);setPasswordForm({currentPassword:'',newPassword:'',confirmPassword:''});alert('密码修改成功，请使用新密码重新登录');location.reload()}
  function ask(title:string,value='',type:'text'|'date'|'number'='text',options?:string[]){return new Promise<string|null>(resolve=>{inputResolver.current=resolve;setInputDialog({title,value,type,options})})}
  function closeAsk(value:string|null){inputResolver.current?.(value);inputResolver.current=null;setInputDialog(null)}
- async function persist(next:AppState,msg='已保存',action='更新数据'){pendingSaves.current++;setNotice(`${factoryName(activeFactory)}：正在保存…`);try{const r=await fetch(`/api/state?factory=${activeFactory}`,{method:'PUT',headers:{'content-type':'application/json','prefer':'return=minimal'},body:JSON.stringify({state:next,expectedRevision:stateRevision,action,summary:msg})}),result=await r.json();if(r.status===409){setNotice('检测到其他用户已更新数据，系统已刷新，请重新执行刚才的操作');await loadFactory(activeFactory);setTimeout(()=>setNotice(''),4200);return false}if(!r.ok||!result.ok)throw new Error(result.error||'save_failed');setData(normalizeState(result.state||next,activeFactory));setStateRevision(result.revision||stateRevision+1);setAuditLog(result.audit||[]);setFactorySummaries(s=>({...s,[activeFactory]:summaryOf(next)}));setNotice(`${factoryName(activeFactory)}：${msg}`);setTimeout(()=>setNotice(''),2600);return true}catch{setNotice('保存失败，数据未覆盖，请刷新后重试');setTimeout(()=>setNotice(''),4200);return false}finally{pendingSaves.current--}}
+ async function persist(next:AppState,msg='已保存',action='更新数据'){pendingSaves.current++;setNotice(`${factoryName(activeFactory)}：正在保存…`);try{const r=await fetch(`/api/state?factory=${activeFactory}`,{method:'PUT',headers:{'content-type':'application/json','prefer':'return=minimal'},body:JSON.stringify({state:next,expectedRevision:stateRevision,action,summary:msg})}),result=await r.json();if(r.status===409){setNotice('检测到其他用户已更新数据，系统已刷新，请重新执行刚才的操作');await loadFactory(activeFactory);setTimeout(()=>setNotice(''),4200);return false}if(r.status===422&&typeof result.message==='string'){setNotice(result.message);return false}if(!r.ok||!result.ok)throw new Error(result.error||'save_failed');const saved=normalizeState(result.state||next,activeFactory);setData(saved);setStateRevision(result.revision||stateRevision+1);setAuditLog(result.audit||[]);setFactorySummaries(s=>({...s,[activeFactory]:summaryOf(saved)}));setNotice(`${factoryName(activeFactory)}：${msg}`);setTimeout(()=>setNotice(''),2600);return true}catch{setNotice('保存失败，数据未覆盖，请刷新后重试');setTimeout(()=>setNotice(''),4200);return false}finally{pendingSaves.current--}}
  const metrics=useMemo(()=>{const pending=data.orders.filter(o=>o.status!=='已完成'&&!isExternal(data.parts.find(p=>p.code===o.partCode))),lateOrders=new Set(data.allocations.filter(a=>a.status==='延期').map(a=>a.orderNo));return{pending:pending.length,work:pending.reduce((s,o)=>{const p=data.parts.find(x=>x.code===o.partCode);return s+Math.max(0,o.qty-o.done)*(p?.unit||0)},0),late:lateOrders.size,util:data.allocations.length?Math.round(data.allocations.reduce((s,a)=>s+a.amount/a.capacity,0)/data.allocations.length*100):0}},[data]);
  const historicalPeople=useMemo(()=>[...new Set((data.skillEvidence||[]).map(e=>e.person).filter(Boolean))].sort(),[data.skillEvidence]);
  const processWarnings=useMemo(()=>{const out:{key:string,level:string,type:string,task:ProcessTask,reason:string}[]=[];for(const t of data.processTasks||[]){if(t.remainingQty<=0)continue;const p=data.parts.find(x=>x.code===t.partCode),days=workdaysUntil(today(),t.due);if(t.due&&(t.due<today()||days<=1))out.push({key:t.id+'-late',level:'红色',type:'预计延期',task:t,reason:`距交期不超过1个工作日，仍剩 ${t.remainingQty}`});else if(t.due&&days<=3)out.push({key:t.id+'-yellow',level:'黄色',type:'余量不足',task:t,reason:`距交期仅 ${days} 个工作日，需优先关注`});if(carOperation(t.operationName)&&(!p||!p.unit))out.push({key:t.id+'-time',level:'灰色',type:'资料缺失',task:t,reason:'缺少当前车工工序标准工时'});if(carOperation(t.operationName)&&(!p||!matchingWorkers(p,data.workers).length))out.push({key:t.id+'-worker',level:'灰色',type:'无人员匹配',task:t,reason:'未配置工件—人员关系，历史报工也未匹配到现有人员'});if(t.status==='待前序确认')out.push({key:t.id+'-wait',level:'黄色',type:'等待前序',task:t,reason:'前序完成或质检放行状态未明确，不进入正式排产'})}return out},[data.processTasks,data.parts,data.workers]);
@@ -289,6 +294,7 @@ export default function SchedulerApp(){
    }
    if(!assignmentForm.transfer&&data.allocations.some(a=>allocationBelongsTo(a,order,data.orders))&&!window.confirm('你选择了“仅下次排产生效”。当前排产中的员工不会改变，刷新后也不会改变。确定只保存下次排产规则吗？'))return;
    const assignment=assignOrderWorker(order,data.orders,data.allocations,data.workers,assignmentForm.workerId,assignmentForm.reason,sessionInfo?.displayName||'计划员',new Date().toISOString(),assignmentForm.transfer&&!rescheduleAssignment),updated=assignment.order;let allocations=assignment.allocations;
+   if(assignmentForm.transfer&&!rescheduleAssignment)allocations=allocations.map((row,i)=>row.worker!==data.allocations[i]?.worker?{...row,startTime:undefined,endTime:undefined}:row);
    if(rescheduleAssignment){
     const plan=planOrderTransfer({...order,drawingNo:drawingFor(order)},data.orders,data.allocations,data.workers,assignmentForm.workerId,data.parts.find(p=>p.code===order.partCode)?.unit||0,today());
     if(!window.confirm(`将此订单全部剩余工作量 ${plan.required.toFixed(1)} 转给指定员工，共 ${plan.planned.length} 个工作日，预计 ${plan.finish} 完成（${plan.late?'超过交期 '+order.due:'按期'}）。其他订单不变，不自动加班；替换本订单当前派工及未排缺口。确认保存？`))return;
@@ -320,7 +326,7 @@ export default function SchedulerApp(){
    if(ok)setCompleting(null);else setCompletionError('未保存，请保留输入内容并重试');
   }catch(error){setCompletionError(error instanceof Error?error.message:'完工登记失败')}finally{setCompletionSaving(false)}
  }
- async function run(){const result=schedule(data,true),at=new Date().toLocaleString('zh-CN');if(await persist({...withoutCurrentPlan(data),allocations:result.allocations,scheduleShortages:result.shortages,issues:result.blocked,lastRun:at,planStatus:'草稿',planUpdatedAt:at,planUpdatedBy:sessionInfo?.displayName},`六工作日滚动排产完成：生成 ${result.allocations.length} 条派工记录，${result.shortages.length} 项存在未排缺口，${result.blocked.length} 项资料待确认`,'生成排产'))setTab('排产结果')}
+ async function run(){const result=schedule(data,true),at=new Date().toLocaleString('zh-CN');if(await persist({...withoutCurrentPlan(data),...(data.mesSync?{mesSync:{...data.mesSync,planNeedsReview:false}}:{}),allocations:result.allocations,scheduleShortages:result.shortages,issues:result.blocked,lastRun:at,planStatus:'草稿',planUpdatedAt:at,planUpdatedBy:sessionInfo?.displayName},`六工作日滚动排产完成：生成 ${result.allocations.length} 条派工记录，${result.shortages.length} 项存在未排缺口，${result.blocked.length} 项资料待确认`,'生成排产'))setTab('排产结果')}
  async function refreshData(){
   if(pendingSaves.current||importing||refreshInProgress.current||loading)return;
   refreshInProgress.current=true;
@@ -339,14 +345,57 @@ export default function SchedulerApp(){
    setOrderForm({orderNo:'',customer:'',partCode:'',qty:'',due:'',priority:'3'});
    cancelWorkerEdit();setEditingPartCode('');setPartForm({drawingNo:'',code:'',name:'',category:'',operationCode:'TURN',processMode:'internal',unit:'',workers:[]});
    setHourRuleForm({id:'',category:'',operator:'gt',threshold:'',workerIds:[],mode:'preferred'});
-   setResultDay('');setResultView('week');setNotice(`已切换到${factoryName(factory)}`);
+   setResultDay('');setResultView('week');setBatchGapsOpen(false);setNotice(`已切换到${factoryName(factory)}`);
   }catch{setNotice('切换失败，当前仍为原工厂')}finally{setLoading(false);setTimeout(()=>setNotice(''),3200)}
  }
  async function clearSchedule(){if(!data.allocations.length&&!data.scheduleShortages?.length&&!data.lastRun){setNotice('当前已经是无安排状态');setTimeout(()=>setNotice(''),2200);return}if(!window.confirm('确定清空当前排产结果吗？订单、人员和工件资料会保留。'))return;await persist(withoutCurrentPlan(data),'当前计划已清空，所有任务恢复为无安排','清空排产');setTab('排产结果')}
  async function clearCurrent(){const target=tab==='订单管理'?'全部订单':tab==='人员产能'?'全部人员':tab==='工件定额'?'全部工件资料':'';if(!target)return;if(!window.confirm(`确定清空${target}吗？此操作不能撤销。`))return;let next={...data};if(tab==='订单管理')next={...next,orders:[],allocations:[],issues:[]};if(tab==='人员产能')next={...next,workers:[],allocations:[]};if(tab==='工件定额')next={...next,parts:[],allocations:[],issues:data.orders.map(o=>({key:o.id,partCode:o.partCode,name:o.name,reason:'缺少单件定额、无匹配人员'}))};await persist(withoutCurrentPlan(next),`${target}已清空`)}
- async function confirmSchedule(){if(eligibleRows.length!==currentRows.length){setNotice('旧计划含资料待确认的订单，请先重新排产再确认');return}if(!data.allocations.length){setNotice('当前没有可确认的排产结果');setTimeout(()=>setNotice(''),2200);return}const approver=await ask('请输入本周计划确认人（含加班产能时应为主管）',sessionInfo?.displayName||'');if(!approver)return;const createdAt=new Date().toLocaleString('zh-CN'),snapshotId=crypto.randomUUID(),history=[{id:snapshotId,createdAt,label:`六工作日计划 ${createdAt} · 确认人：${approver}`,allocations:data.allocations.map(a=>({...a,candidates:[...(a.candidates||[])]})),status:'已确认' as PlanStatus,confirmedBy:approver},...(data.history||[])];if(await persist({...data,history,planStatus:'已确认',planSnapshotId:snapshotId,planChangeNote:undefined,planUpdatedAt:createdAt,planUpdatedBy:approver},'六工作日计划已确认并保存到历史记录','确认计划'))setTab('排产结果')}
- async function editAllocation(a:Allocation){const rowIndex=currentRows.indexOf(a);if(rowIndex>=0)a=data.allocations[rowIndex];if(!data.allocations.includes(a)){setNotice('派工已变更，请刷新后重试');return}const frozen=a.date<=today();if(frozen&&!window.confirm('该任务属于当天/已发布冻结区域，仅故障、请假或紧急插单允许调整。是否继续？'))return;const reason=await ask(`请输入调整原因（必填）｜${a.name}｜图号：${drawingFor(a)||'未提供'}`);if(!reason)return;const approver=await ask('请输入审批人（必填）',sessionInfo?.displayName||'');if(!approver)return;const date=await ask('调整加工日期',a.date,'date');if(!date)return;const workerName=await ask('调整人员（仅当前这条派工；整单指定请到订单管理）',a.worker,'text',data.workers.filter(w=>w.active).map(w=>w.name));if(!workerName)return;const worker=data.workers.find(w=>w.name===workerName&&w.active);if(!worker){setNotice('未找到该在岗人员');setTimeout(()=>setNotice(''),2200);return}const amount=Number(await ask('调整当天工作量',String(a.amount),'number'));if(!(amount>0)){setNotice('工作量必须大于0');setTimeout(()=>setNotice(''),2200);return}const used=data.allocations.filter(x=>x!==a&&x.date===date&&x.worker===workerName).reduce((s,x)=>s+x.amount,0);if(used+amount>worker.overtime&&!window.confirm(`调整后当天工作量${used+amount}超过含加班上限${worker.overtime}，仍要保存吗？`))return;const order=data.orders.find(o=>allocationBelongsTo(a,o,data.orders)),part=data.parts.find(p=>p.code===a.partCode),required=order&&part?Math.max(0,order.qty-order.done)*part.unit:0,other=data.allocations.filter(x=>x!==a&&x.partCode===a.partCode&&(a.orderId?x.orderId===a.orderId:x.orderNo===a.orderNo)).reduce((s,x)=>s+x.amount,0),newTotal=other+amount;if(required&&newTotal>required+.001){setNotice(`调整被拒绝：该订单应排 ${required.toFixed(1)}，调整后将排 ${newTotal.toFixed(1)}，超出 ${(newTotal-required).toFixed(1)}`);setTimeout(()=>setNotice(''),4200);return}const allocations=data.allocations.map(x=>x===a?{...x,date,worker:workerName,amount,capacity:worker.overtime,reason:`人工调整：${reason}；审批人：${approver}${frozen?'；打破冻结':''}`,candidates:[workerName],status:date<=x.due?'按期':'延期'}:x),remaining=Math.max(0,required-newTotal),shortages=[...(data.scheduleShortages||[]).filter(x=>order?!allocationBelongsTo(x,order,data.orders):x.orderNo!==a.orderNo||x.partCode!==a.partCode)];if(remaining>.001)shortages.push({orderId:a.orderId,drawingNo:drawingFor(a),orderNo:a.orderNo,partCode:a.partCode,name:a.name,due:a.due,requiredWork:required,scheduledWork:newTotal,remainingWork:remaining,remainingQty:part?.unit?remaining/part.unit:0,suggestedWorker:workerName,reason:'人工调整后仍有未排工作量'});await persist({...data,allocations,scheduleShortages:shortages,planStatus:'已变更',planUpdatedAt:new Date().toLocaleString('zh-CN'),planUpdatedBy:approver,planChangeNote:reason},`人工调整已保存；订单总量 ${newTotal.toFixed(1)} / ${required.toFixed(1)}${remaining?`，未排 ${remaining.toFixed(1)}`:'，数量平衡'}`,'人工调整')}
- function exportSchedule(){if(!eligibleRows.length){setNotice('当前没有可导出的排产结果');setTimeout(()=>setNotice(''),2200);return}const wb=XLSX.utils.book_new(),plan=eligibleRows.map(a=>({'加工日期':a.date,'人员':a.worker,'订单号':a.orderNo,'物料编码':a.partCode,'图号':drawingFor(a),'工件':a.name,'当天工作量':a.amount,'日产能':a.capacity,'订单交期':a.due,'结果':a.status,'分配依据':a.reason||''})),shortages=eligibleShortfalls.map(s=>({'订单号':s.orderNo,'物料编码':s.partCode,'图号':drawingFor(s),'工件':s.name,'交期':s.due,'应排工作量':s.requiredWork,'已排工作量':s.scheduledWork,'未排工作量':s.remainingWork,'折合未排数量':s.remainingQty,'建议人员':s.suggestedWorker||'','预计完成':s.estimatedFinish||'','原因':s.reason})),workers=[...new Set(eligibleRows.map(a=>a.worker))].map(worker=>{const rows=eligibleRows.filter(a=>a.worker===worker);return{'人员':worker,'派工条数':rows.length,'合计工作量':rows.reduce((n,a)=>n+a.amount,0),'最晚排至':[...rows].sort((a,b)=>b.date.localeCompare(a.date))[0]?.date||''}});XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(plan),'六日车工计划');XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(shortages.length?shortages:[{'说明':'六工作日窗口内无未排缺口'}]),'未排缺口');XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(workers),'人员汇总');XLSX.writeFile(wb,`${factoryName(activeFactory)}-车工六日计划-${today()}.xlsx`);setNotice('排产Excel已导出（含计划、未排缺口、人员汇总）');setTimeout(()=>setNotice(''),3000)}
+ async function confirmSchedule(){if(data.mesSync?.planNeedsReview){setNotice('MES 数据已更新，请先重新排产核对');return}if(eligibleRows.length!==currentRows.length){setNotice('旧计划含资料待确认的订单，请先重新排产再确认');return}if(!data.allocations.length){setNotice('当前没有可确认的排产结果');setTimeout(()=>setNotice(''),2200);return}const approver=await ask('请输入本周计划确认人（含加班产能时应为主管）',sessionInfo?.displayName||'');if(!approver)return;const createdAt=new Date().toLocaleString('zh-CN'),snapshotId=crypto.randomUUID(),history=[{id:snapshotId,createdAt,label:`六工作日计划 ${createdAt} · 确认人：${approver}`,allocations:data.allocations.map(a=>({...a,candidates:[...(a.candidates||[])]})),status:'已确认' as PlanStatus,confirmedBy:approver},...(data.history||[])];if(await persist({...data,history,planStatus:'已确认',planSnapshotId:snapshotId,planChangeNote:undefined,planUpdatedAt:createdAt,planUpdatedBy:approver},'六工作日计划已确认并保存到历史记录','确认计划'))setTab('排产结果')}
+ async function editAllocation(a:Allocation){const rowIndex=currentRows.indexOf(a);if(rowIndex>=0)a=data.allocations[rowIndex];if(!data.allocations.includes(a)){setNotice('派工已变更，请刷新后重试');return}const frozen=a.date<=today();if(frozen&&!window.confirm('该任务属于当天/已发布冻结区域，仅故障、请假或紧急插单允许调整。是否继续？'))return;const reason=await ask(`请输入调整原因（必填）｜${a.name}｜图号：${drawingFor(a)||'未提供'}`);if(!reason)return;const approver=await ask('请输入审批人（必填）',sessionInfo?.displayName||'');if(!approver)return;const date=await ask('调整加工日期',a.date,'date');if(!date)return;const workerName=await ask('调整人员（仅当前这条派工；整单指定请到订单管理）',a.worker,'text',data.workers.filter(w=>w.active).map(w=>w.name));if(!workerName)return;const worker=data.workers.find(w=>w.name===workerName&&w.active);if(!worker){setNotice('未找到该在岗人员');setTimeout(()=>setNotice(''),2200);return}const amount=Number(await ask('调整当天工作量',String(a.amount),'number'));if(!(amount>0)){setNotice('工作量必须大于0');setTimeout(()=>setNotice(''),2200);return}const used=data.allocations.filter(x=>x!==a&&x.date===date&&x.worker===workerName).reduce((s,x)=>s+x.amount,0);if(used+amount>worker.overtime&&!window.confirm(`调整后当天工作量${used+amount}超过含加班上限${worker.overtime}，仍要保存吗？`))return;const order=data.orders.find(o=>allocationBelongsTo(a,o,data.orders)),part=data.parts.find(p=>p.code===a.partCode),required=order&&part?Math.max(0,order.qty-order.done)*part.unit:0,other=data.allocations.filter(x=>x!==a&&x.partCode===a.partCode&&(a.orderId?x.orderId===a.orderId:x.orderNo===a.orderNo)).reduce((s,x)=>s+x.amount,0),newTotal=other+amount;if(required&&newTotal>required+.001){setNotice(`调整被拒绝：该订单应排 ${required.toFixed(1)}，调整后将排 ${newTotal.toFixed(1)}，超出 ${(newTotal-required).toFixed(1)}`);setTimeout(()=>setNotice(''),4200);return}const allocations=data.allocations.map(x=>x===a?{...x,...(x.date!==date||x.worker!==workerName||x.amount!==amount?{startTime:undefined,endTime:undefined}:{}),date,worker:workerName,amount,capacity:worker.overtime,reason:`人工调整：${reason}；审批人：${approver}${frozen?'；打破冻结':''}`,candidates:[workerName],status:date<=x.due?'按期':'延期'}:x),remaining=Math.max(0,required-newTotal),shortages=[...(data.scheduleShortages||[]).filter(x=>order?!allocationBelongsTo(x,order,data.orders):x.orderNo!==a.orderNo||x.partCode!==a.partCode)];if(remaining>.001)shortages.push({orderId:a.orderId,drawingNo:drawingFor(a),orderNo:a.orderNo,partCode:a.partCode,name:a.name,due:a.due,requiredWork:required,scheduledWork:newTotal,remainingWork:remaining,remainingQty:part?.unit?remaining/part.unit:0,suggestedWorker:workerName,reason:'人工调整后仍有未排工作量'});await persist({...data,allocations,scheduleShortages:shortages,planStatus:'已变更',planUpdatedAt:new Date().toLocaleString('zh-CN'),planUpdatedBy:approver,planChangeNote:reason},`人工调整已保存；订单总量 ${newTotal.toFixed(1)} / ${required.toFixed(1)}${remaining?`，未排 ${remaining.toFixed(1)}`:'，数量平衡'}`,'人工调整')}
+ function exportSchedule(){if(!eligibleRows.length){setNotice('当前没有可导出的排产结果');setTimeout(()=>setNotice(''),2200);return}const wb=XLSX.utils.book_new(),plan=eligibleRows.map(a=>({'加工日期':a.date,'开始时间':a.startTime||'','结束时间':a.endTime||'','人员':a.worker,'订单号':a.orderNo,'物料编码':a.partCode,'图号':drawingFor(a),'工件':a.name,'当天工作量':a.amount,'日产能':a.capacity,'订单交期':a.due,'结果':a.status,'分配依据':a.reason||''})),shortages=eligibleShortfalls.map(s=>({'订单号':s.orderNo,'物料编码':s.partCode,'图号':drawingFor(s),'工件':s.name,'交期':s.due,'应排工作量':s.requiredWork,'已排工作量':s.scheduledWork,'未排工作量':s.remainingWork,'折合未排数量':s.remainingQty,'建议人员':s.suggestedWorker||'','预计完成':s.estimatedFinish||'','原因':s.reason})),workers=[...new Set(eligibleRows.map(a=>a.worker))].map(worker=>{const rows=eligibleRows.filter(a=>a.worker===worker);return{'人员':worker,'派工条数':rows.length,'合计工作量':rows.reduce((n,a)=>n+a.amount,0),'最晚排至':[...rows].sort((a,b)=>b.date.localeCompare(a.date))[0]?.date||''}});XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(plan),'六日车工计划');XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(shortages.length?shortages:[{'说明':'六工作日窗口内无未排缺口'}]),'未排缺口');XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(workers),'人员汇总');XLSX.writeFile(wb,`${factoryName(activeFactory)}-车工六日计划-${today()}.xlsx`);setNotice('排产Excel已导出（含计划、未排缺口、人员汇总）');setTimeout(()=>setNotice(''),3000)}
+ function downloadOrderTemplate(){
+  try{XLSX.writeFile(buildOrderTemplate(),'序衡APS-订单导入模板.xlsx');setNotice('订单导入模板已下载')}
+  catch{setNotice('模板下载失败，请重试')}
+  setTimeout(()=>setNotice(''),3000);
+ }
+ async function applyBatchGaps(preview:ReturnType<typeof previewBatchGaps>){
+  if(pendingSaves.current||refreshInProgress.current||!preview.items.some(item=>item.added>0))return false;
+  if(data.mesSync?.planNeedsReview){setNotice('MES 数据已更新，请先重新排产核对');return false}
+  const reason=`批量补排 ${preview.items.filter(item=>item.added>0).length} 张订单，${preview.items.filter(item=>item.remaining>.001).length} 张仍有缺口`;
+  const saved=await persist({...data,allocations:preview.allocations,scheduleShortages:preview.shortages,planStatus:'已变更',planSnapshotId:undefined,planUpdatedAt:new Date().toLocaleString('zh-CN'),planUpdatedBy:sessionInfo?.displayName,planChangeNote:reason},reason,'产能缺口批量补排');
+  if(saved)setBatchGapsOpen(false);
+  return saved;
+ }
+ async function editWorkingWindows(){
+  const text=await ask('工作时段（如 08:00-12:00,13:00-17:00；请填实际班次）',data.workingWindows||'');
+  if(!text||text===data.workingWindows)return;
+  try{validateWorkingWindows(data.allocations,text);await persist({...data,workingWindows:text},'本厂工作时段已保存','维护工作时段')}
+  catch(error){setNotice(error instanceof Error?error.message:'工作时段无效')}
+ }
+ async function changeDispatchSlot(row:Allocation,minutes?:number){
+  const index=currentRows.indexOf(row);
+  if(index<0){setNotice('派工已变更，请刷新后重试');return}
+  const windows=data.workingWindows;
+  if(!windows){setNotice('请先在排产结果页设置本厂工作时段');return}
+  try{
+   let next:Allocation[];
+   if(minutes!==undefined)next=shiftDispatchSlot(data.allocations,index,windows,minutes);
+   else{
+    const start=await ask('开始时间（HH:mm）',row.startTime||'');
+    if(!start)return;
+    const duration=await ask('预计持续时间（分钟，按实际加工时长填写）','','number');
+    if(!duration)return;
+    next=setDispatchSlot(data.allocations,index,windows,start,Number(duration));
+   }
+   const reason=await ask('请输入时段调整原因（必填）');
+   if(!reason)return;
+   const locked=row.date<=today()||data.planStatus==='已发布'||data.planStatus==='已确认';
+   const actor=locked?await ask('该派工已确认或已到执行日期，请填写审批人',sessionInfo?.displayName||''):sessionInfo?.displayName||'计划员';
+   if(!actor)return;
+   next=next.map((item,i)=>i===index?{...item,reason:`${item.reason||'人工派工'}；时段调整：${reason}${locked?`；审批人：${actor}`:''}`}:item);
+   await persist({...data,allocations:next,planStatus:'已变更',planSnapshotId:undefined,planUpdatedAt:new Date().toLocaleString('zh-CN'),planUpdatedBy:actor,planChangeNote:reason},`${row.orderNo} 时段已更新为 ${next[index].startTime}–${next[index].endTime}`,'调整派工时段');
+  }catch(error){setNotice(error instanceof Error?error.message:'调整时段失败')}
+ }
  function exportDailyDispatch(date:string){
   const output=buildDailyDispatch(factoryName(activeFactory),date,data.planStatus||'草稿',eligibleRows);
   if(!output){setNotice('所选日期没有可导出的派工');return}
@@ -366,6 +415,7 @@ export default function SchedulerApp(){
    ?{...row,status,publishedAt:at,publishedBy:operator}
    :{...row,status,withdrawnAt:at,withdrawnBy:operator,changeNote:note||undefined});
   const isActive=activeSnapshot?.id===snapshot.id;
+  if(isActive&&status==='已发布'&&data.mesSync?.planNeedsReview){setNotice('MES 数据已更新，请先重新排产核对');return}
   if(isActive&&status==='已发布'&&eligibleRows.length!==currentRows.length){setNotice('旧计划含资料待确认的订单，请先重新排产再发布');return}
   const next:AppState=isActive
    ?{...data,history,planStatus:status,planSnapshotId:snapshot.id,planUpdatedAt:at,planUpdatedBy:operator,planChangeNote:note||undefined}
@@ -490,6 +540,7 @@ export default function SchedulerApp(){
   }
   const firstRows=XLSX.utils.sheet_to_json<Record<string,unknown>>(firstSheet,{defval:''});
   const detectedFactory=factoryFromRows(firstRows);
+  if(detectedFactory==='mixed'){setNotice('文件混有西安和兴平数据，请按工厂拆分后再导入');return}
   if(detectedFactory&&detectedFactory!==activeFactory){setNotice(`文件归属${factoryName(detectedFactory)}，当前为${factoryName(activeFactory)}，未执行导入`);setTimeout(()=>setNotice(''),4200);return}
   const headers=new Set(Object.keys(firstRows[0]||{}).map(x=>x.trim())),fileTypeName=file.name.replaceAll(' ','').toLowerCase(),importLog=[importEntry(file.name,'未识别',firstRows.length,'已读取'),...(data.importLog||[])].slice(0,30);
   if(headers.has('工单编号')&&headers.has('计划编号')&&headers.has('数量(累计产量)')&&headers.has('工序名称')){
@@ -558,7 +609,7 @@ export default function SchedulerApp(){
   {tab==='使用引导'&&<MioraGuide steps={guideSteps} onStart={()=>showGuide(0)} onNavigate={setTab}/>}
   {tab==='产品地图'&&<MioraProductMap onNavigate={setTab}/>}
   {tab==='数据导入'&&<div className="compact-page"><section className="cards"><Metric label="待排车工订单" value={data.orders.filter(o=>o.status!=='已完成'&&!isExternal(data.parts.find(p=>p.code===o.partCode))).length} note="MES订单"/><Metric label="车工人员" value={data.workers.filter(w=>w.active).length} note="已启用"/><Metric label="工件定额" value={data.parts.filter(p=>!isExternal(p)&&p.unit>0).length} note="已维护"/><Metric label="导入记录" value={(data.importLog||[]).length} note="最近30次"/></section><section className="panel miora-upload" aria-busy={importing}>
-    <div className="panel-title"><div><small>MES EXCEL</small><h3>上传生产数据</h3></div></div>
+    <div className="panel-title"><div><small>MES EXCEL</small><h3>上传生产数据</h3></div><button type="button" className="import" onClick={downloadOrderTemplate}>下载订单导入模板</button></div>
     <div className="miora-dropzone" onDragOver={event=>event.preventDefault()} onDrop={event=>{event.preventDefault();void uploadWorkbook(event.dataTransfer.files[0])}}>
       <strong>选择或拖入 MES 导出的文件</strong><small>支持 .xlsx、.xls、.csv；识别计划、进度、报工和人员能力。</small>
       <label className="primary miora-file-action">{importing?'正在导入…':'选择文件'}<input type="file" aria-label="导入 MES Excel" disabled={importing} accept=".xlsx,.xls,.csv" onChange={event=>{void uploadWorkbook(event.currentTarget.files?.[0]);event.currentTarget.value=''}}/></label>
@@ -606,12 +657,18 @@ export default function SchedulerApp(){
   </div>}
   {tab==='外协任务池'&&<section className="panel"><div className="panel-title"><div><small>不占用内部人员产能</small><h3>外协加工任务</h3></div><span className="pending">{data.orders.filter(o=>isExternal(data.parts.find(p=>p.code===o.partCode))&&o.status!=='已完成').length} 项待外协</span></div>{data.orders.some(o=>isExternal(data.parts.find(p=>p.code===o.partCode)))?<div className="table-wrap"><table><thead><tr><th>订单号</th><th>物料编码</th><th>名称</th><th>客户</th><th>数量</th><th>工序编码</th><th>交期</th><th>状态</th><th>操作</th></tr></thead><tbody>{data.orders.filter(o=>isExternal(data.parts.find(p=>p.code===o.partCode))).map(o=>{const p=data.parts.find(x=>x.code===o.partCode);return <tr key={o.id}><td className="mono">{o.orderNo}</td><td className="mono">{o.partCode}</td><td><b>{o.name}</b></td><td>{o.customer}</td><td>{Math.max(0,o.qty-o.done)}</td><td className="mono">{p?.operationCode||'待补充'}</td><td>{o.due}</td><td><span className={o.status==='已完成'?'ok':'pending'}>{o.status==='已完成'?'外协完成':'待外协'}</span></td><td><button className={o.status==='已完成'?'pending':'ok'} style={{border:0,cursor:'pointer'}} onClick={()=>toggleExternalOrder(o)}>{o.status==='已完成'?'恢复待办':'确认完成'}</button></td></tr>})}</tbody></table></div>:<div className="empty"><b>暂无外协任务</b><span>在订单的“补充并确认”中选择外协加工，任务会自动转入这里。</span></div>}</section>}
   {tab==='排产结果'&&<>
+   <section className="panel"><div className="panel-title">
+    <div><h3>工作时段</h3><small>{data.workingWindows||'尚未设置'} · 仅对已设置时段的派工检查冲突</small></div>
+    <button type="button" className="import" onClick={editWorkingWindows}>设置工作时段</button>
+   </div></section>
+   {data.mesSync?.planNeedsReview&&<p className="import-issues" role="status">MES 数据已更新；现有计划未自动覆盖。请核对订单后重新排产。</p>}
    <MioraPlan rows={eligibleRows} dates={planDates} view={resultView} day={resultDay} status={data.planStatus||'草稿'}
     updated={data.planUpdatedBy?`${data.planUpdatedBy} · ${data.planUpdatedAt||''}`:data.lastRun} changeNote={data.planChangeNote}
     shortages={eligibleShortfalls} issues={reviewIssues} onView={setResultView} onDay={setResultDay} onIssues={openOrderReview} onExportDay={exportDailyDispatch}
-    onEdit={editAllocation} onAssign={changeAllocationWorker} onComplete={completeAllocation}
+    onEdit={editAllocation} onAssign={changeAllocationWorker} onComplete={completeAllocation} onBatch={()=>setBatchGapsOpen(true)} onSlot={changeDispatchSlot}
     progress={row=>{const order=data.orders.find(o=>allocationBelongsTo(row,o,data.orders));return order?`完工 ${order.done}/${order.qty}`:'请在订单管理核对'}}/>
    <WorkerLoadAnalysis workers={data.workers} parts={data.parts} orders={data.orders} rows={eligibleRows}/>
+   {batchGapsOpen&&<MioraGapDialog key={`${activeFactory}:${stateRevision}`} state={data} rows={eligibleShortfalls} earliestDate={today()} onClose={()=>setBatchGapsOpen(false)} onApply={applyBatchGaps}/>}
   </>}
    {tab==='历史记录'&&<div className="compact-page"><section className="panel"><div className="panel-title"><div><small>已确认计划快照</small><h3>周计划历史记录</h3></div></div>{data.history?.length?<div style={{display:'grid',gap:12}}>{data.history.map(h=><details key={h.id} style={{border:'1px solid var(--rule)',padding:14}}><summary style={{cursor:'pointer',fontWeight:800}}>{h.label}<span className={h.status==='已发布'?'ok':h.status==='已撤回'?'late':'pending'} style={{marginLeft:12}}>{h.status||'已确认'}</span><span style={{marginLeft:12,color:'var(--muted)',fontSize:11}}>{h.allocations.length}条派工记录</span></summary><div style={{display:'flex',gap:8,margin:'12px 0'}}>{(h.status||'已确认')==='已确认'&&<button className="primary" onClick={()=>changeHistoryStatus(h,'已发布')}>发布执行</button>}{h.status==='已发布'&&<button className="import" style={{color:'#a8322b'}} onClick={()=>changeHistoryStatus(h,'已撤回')}>撤回计划</button>}{h.changeNote&&<span className="late">原因：{h.changeNote}</span>}</div><HistorySchedule rows={h.allocations}/></details>)}</div>:<div className="empty"><b>暂无历史记录</b><span>在排产结果中点击“确认本周计划”后保存。</span></div>}</section><details className="panel compact-section"><summary className="compact-summary"><span><b>操作日志</b><small>用于追溯操作，可按需展开</small></span><em>{auditLog.length} 条</em></summary><div className="table-wrap capped-table"><table><thead><tr><th>时间</th><th>操作人</th><th>动作</th><th>说明</th><th>版本</th></tr></thead><tbody>{auditLog.slice(0,100).map(x=><tr key={x.id}><td>{new Date(x.createdAt).toLocaleString('zh-CN')}</td><td><b>{x.actor}</b></td><td>{x.action}</td><td>{x.summary}</td><td>v{x.revision}</td></tr>)}</tbody></table></div></details></div>}
    {guideStep!==null&&<div className="guide-backdrop" role="dialog" aria-modal="true" aria-label="新版使用引导"><section className="guide-card"><div className="guide-progress"><span>使用引导</span><b>{guideStep+1}/{guideSteps.length}</b></div><div className="guide-dots" aria-hidden="true">{guideSteps.map((_,i)=><i key={i} className={i<=guideStep?'active':''}/>)}</div><small>{guideSteps[guideStep].tab}</small><h2>{guideSteps[guideStep].title}</h2><p>{guideSteps[guideStep].body}</p><div className="guide-tip"><b>操作提示</b><span>{guideSteps[guideStep].tip}</span></div><div className="guide-actions"><button type="button" className="guide-skip" onClick={closeGuide}>跳过，以后再看</button>{guideStep>0&&<button type="button" className="import" onClick={()=>showGuide(guideStep-1)}>上一步</button>}<button type="button" className="primary" onClick={nextGuide}>{guideStep===guideSteps.length-1?'完成引导':'下一步'}</button></div></section></div>}
@@ -678,6 +735,6 @@ function OrderSearch({value,onChange,total,matched}:{value:string,onChange:(valu
 function HistorySchedule({rows}:{rows:Allocation[]}){
  return <ScrollableTable label="历史派工明细"><table>
   <thead><tr><th>日期</th><th>人员</th><th>订单号</th><th>物料</th><th>图号</th><th>工件</th><th>工作量</th><th>交期</th><th>结果</th></tr></thead>
-  <tbody>{rows.map((row,index)=><tr key={index}><td>{row.date}</td><td>{row.worker}</td><td className="mono">{row.orderNo}</td><td>{row.partCode}</td><td>{row.drawingNo||'未提供'}</td><td>{row.name}</td><td className="mono">{row.amount.toFixed(1)}</td><td>{row.due}</td><td>{row.status}</td></tr>)}</tbody>
+  <tbody>{rows.map((row,index)=><tr key={index}><td>{row.date}{row.startTime&&row.endTime&&<small className="cell-note">{row.startTime}–{row.endTime}</small>}</td><td>{row.worker}</td><td className="mono">{row.orderNo}</td><td>{row.partCode}</td><td>{row.drawingNo||'未提供'}</td><td>{row.name}</td><td className="mono">{row.amount.toFixed(1)}</td><td>{row.due}</td><td>{row.status}</td></tr>)}</tbody>
  </table></ScrollableTable>
 }

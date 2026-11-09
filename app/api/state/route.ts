@@ -1,5 +1,6 @@
 import {env} from 'cloudflare:workers';
 import {getSession,resolveFactory} from '../auth/access';
+import type {MesSyncState} from '../../server/mes-source';
 
 type StateRow={data:string;revision:number};
 type SaveBody={state?:unknown;expectedRevision?:number;action?:string;summary?:string;restoreBackupId?:string};
@@ -44,10 +45,28 @@ export async function PUT(req:Request){
   await ensure();const factory=resolveFactory(req,session),body=await req.json() as SaveBody,actor=session.displayName||'未知用户';
   const current=await env.DB.prepare(`SELECT data,revision FROM factory_state WHERE factory=?`).bind(factory).first<StateRow>();
   const expected=Number(body.expectedRevision||0);
-  if(current&&expected!==current.revision)return Response.json({error:'conflict',message:'数据已被其他用户更新',currentRevision:current.revision},{status:409});
+  if(expected!==(current?.revision||0))return Response.json({error:'conflict',message:'数据已被其他用户更新',currentRevision:current?.revision||0},{status:409});
+  const mesSync=current?(JSON.parse(current.data) as Partial<MesSyncState>)?.mesSync:undefined;
+  if(body.restoreBackupId&&mesSync)return Response.json({error:'mes_restore_requires_reconciliation',message:'本厂已关联 MES 订单，恢复备份前须先核对同步位置和订单。'},{status:422});
   let nextState=body.state;
   if(body.restoreBackupId){const backup=await env.DB.prepare(`SELECT data FROM factory_state_backup WHERE id=? AND factory=?`).bind(body.restoreBackupId,factory).first<{data:string}>();if(!backup)return Response.json({error:'backup_not_found'},{status:404});nextState=JSON.parse(backup.data)}
   if(!nextState)return Response.json({error:'missing_state'},{status:400});
+  let stateAdjusted=false;
+  if(mesSync){
+   const submitted=nextState as Partial<MesSyncState>;
+   const orderIds=new Set(Array.isArray(submitted.orders)?submitted.orders.map(order=>order?.id):[]);
+   if(Object.values(mesSync.links).some(link=>!orderIds.has(link.orderId))){
+    return Response.json({error:'mes_linked_order_missing',message:'本次操作会移除已关联的 MES 订单，请先核对订单，数据未保存。'},{status:422});
+   }
+   const serverSync=body.action==='生成排产'&&submitted.mesSync?.planNeedsReview===false?{...mesSync,planNeedsReview:false}:mesSync;
+   stateAdjusted=JSON.stringify(submitted.mesSync)!==JSON.stringify(serverSync);
+   nextState={...submitted,mesSync:serverSync};
+  }else if(typeof nextState==='object'&&'mesSync' in nextState){
+   const {...sanitized}=nextState as Partial<MesSyncState>;
+   delete sanitized.mesSync;
+   nextState=sanitized;
+   stateAdjusted=true;
+  }
   const action=body.action||'更新数据',summary=body.summary||action,nextRevision=(current?.revision||0)+1,now=new Date().toISOString();
   if(current){
    await env.DB.prepare(`INSERT INTO factory_state_backup(id,factory,data,revision,actor,action,created_at) VALUES(?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),factory,current.data,current.revision,actor,action,now).run();
@@ -58,7 +77,7 @@ export async function PUT(req:Request){
   await env.DB.prepare(`DELETE FROM factory_state_backup WHERE factory=? AND id NOT IN (SELECT id FROM factory_state_backup WHERE factory=? ORDER BY created_at DESC LIMIT 20)`).bind(factory,factory).run();
   // Old clients retain the full response. New clients already have the exact
   // submitted state and need only a durable-write acknowledgement and audit.
-  const minimal=req.headers.get('prefer')==='return=minimal'&&!body.restoreBackupId;
+  const minimal=req.headers.get('prefer')==='return=minimal'&&!body.restoreBackupId&&!stateAdjusted;
   return Response.json({ok:true,factory,...(minimal?{}:{state:nextState}),revision:nextRevision,...await extras(factory,!minimal)},{headers:{'Cache-Control':'private, no-store',...(minimal?{'Preference-Applied':'return=minimal'}:{})}});
  }catch(e){return Response.json({error:String(e)},{status:500})}
 }

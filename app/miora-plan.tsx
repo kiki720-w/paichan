@@ -3,7 +3,7 @@ import type {ReactNode} from 'react';
 type Dispatch = {
   date: string; worker: string; orderNo: string; partCode: string; name: string;
   amount: number; capacity: number; due: string; status: string; drawingNo?: string;
-  reason?: string; candidates?: string[];
+  reason?: string; candidates?: string[]; startTime?:string; endTime?:string;
 };
 type Shortage = {
   orderId?: string; orderNo: string; partCode: string; name: string; due: string;
@@ -28,19 +28,23 @@ type PlanProps<T extends Dispatch> = {
   shortages: Shortage[]; issues: Issue[]; updated?: string; changeNote?: string;
   onView: (view: 'week' | 'day') => void; onDay: (day: string) => void; onIssues: () => void;
   onExportDay: (day: string) => void;
+  onBatch?: () => void;
+  onSlot?: (row:T,minutes?:number) => void;
   onEdit?: (row: T) => void; onAssign?: (row: T) => void; onComplete?: (row: T) => void;
   progress?: (row: T) => ReactNode;
 };
 
-function PlanTask<T extends Dispatch>({row, onEdit, onAssign, onComplete, progress}: {
+function PlanTask<T extends Dispatch>({row, onEdit, onAssign, onComplete, onSlot, progress}: {
   row: T; onEdit?: (row: T) => void; onAssign?: (row: T) => void;
   onComplete?: (row: T) => void; progress?: (row: T) => ReactNode;
+  onSlot?: (row:T,minutes?:number) => void;
 }) {
   return <details className={`miora-task ${row.status === '延期' ? 'miora-task-late' : ''}`}>
     <summary>
       <strong className="mono">{row.orderNo}</strong>
       <span>{row.name}</span>
       <span className="mono">{row.amount.toFixed(1)} · {row.status}</span>
+      {row.startTime&&row.endTime&&<span className="mono">{row.startTime}–{row.endTime}</span>}
     </summary>
     <div className="miora-task-detail">
       <small>{row.partCode} · {row.drawingNo || '未提供图号'}</small>
@@ -51,12 +55,17 @@ function PlanTask<T extends Dispatch>({row, onEdit, onAssign, onComplete, progre
         {onEdit && <button type="button" className="import" onClick={() => onEdit(row)}>人工调整</button>}
         {onAssign && <button type="button" className="import" onClick={() => onAssign(row)}>整单转派</button>}
         {onComplete && <button type="button" className="import" onClick={() => onComplete(row)}>登记完工</button>}
+        {onSlot && <button type="button" className="import" onClick={() => onSlot(row)}>设置时段</button>}
+        {onSlot&&row.startTime&&row.endTime&&<>
+          <button type="button" className="import" onClick={() => onSlot(row,-60)}>前移 1 小时</button>
+          <button type="button" className="import" onClick={() => onSlot(row,60)}>后移 1 小时</button>
+        </>}
       </div>
     </div>
   </details>;
 }
 
-export function MioraPlan<T extends Dispatch>({rows, dates, view, day, status, shortages, issues, updated, changeNote, onView, onDay, onIssues, onExportDay, onEdit, onAssign, onComplete, progress}: PlanProps<T>) {
+export function MioraPlan<T extends Dispatch>({rows, dates, view, day, status, shortages, issues, updated, changeNote, onView, onDay, onIssues, onExportDay, onBatch, onSlot, onEdit, onAssign, onComplete, progress}: PlanProps<T>) {
   const grouped = new Map<string, Map<string, T[]>>();
   const orders = new Set<string>(), late = new Set<string>();
   for (const row of rows) {
@@ -72,7 +81,7 @@ export function MioraPlan<T extends Dispatch>({rows, dates, view, day, status, s
   const currentDay = dates.includes(day) ? day : dates[0];
   const hasDailyRows = rows.some(row => row.date === currentDay);
   const missingWork = shortages.reduce((total, item) => total + item.remainingWork, 0);
-  const renderTasks = (items: T[]) => items.map((row, index) => <PlanTask key={`${row.orderNo}-${row.partCode}-${index}`} row={row} onEdit={onEdit} onAssign={onAssign} onComplete={onComplete} progress={progress}/>);
+  const renderTasks = (items: T[]) => items.map((row, index) => <PlanTask key={`${row.orderNo}-${row.partCode}-${index}`} row={row} onEdit={onEdit} onAssign={onAssign} onComplete={onComplete} onSlot={onSlot} progress={progress}/>);
   return <div className="miora-plan compact-page">
     <section className="miora-plan-band" aria-label="计划状态">
       <div><small>计划状态</small><span className={status === '已撤回' ? 'late' : status === '已发布' || status === '已确认' ? 'ok' : 'pending'}>{status}</span></div>
@@ -108,7 +117,7 @@ export function MioraPlan<T extends Dispatch>({rows, dates, view, day, status, s
       </table>{!hasDailyRows && <div className="empty">该工作日没有派工。</div>}</div>}
     </section>
     <section className="panel" aria-label="产能缺口清单">
-      <div className="panel-title"><div><small>六天内未排完的工作</small><h3>产能缺口清单</h3></div><span className={shortages.length ? 'late' : 'ok'}>{shortages.length} 项</span></div>
+      <div className="panel-title"><div><small>六天内未排完的工作</small><h3>产能缺口清单</h3></div><div className="row"><span className={shortages.length ? 'late' : 'ok'}>{shortages.length} 项</span>{onBatch&&shortages.length>0&&<button type="button" className="import" onClick={onBatch}>批量补排</button>}</div></div>
       {shortages.length ? <div className="table-wrap"><table>
         <thead><tr><th>订单 / 工件</th><th>交期</th><th>未排工作量</th><th>缺口数量</th><th>建议 / 预计</th><th>原因</th></tr></thead>
         <tbody>{shortages.map(item => <tr key={item.orderId ?? item.orderNo + '|' + item.partCode}>
