@@ -7,7 +7,7 @@ const rulesModule={exports:{}};
 vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../app/feedback-rules.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:rulesModule.exports,module:rulesModule,Error});
 const {matchesOrderSearch,orderCandidates,assignOrderWorker,preserveImportedCompletion}=rulesModule.exports;
 const workers=[{id:'a',name:'A',active:true,skills:['拉杆'],capacity:100,overtime:120},{id:'b',name:'B',active:true,skills:['专线拉杆'],capacity:100,overtime:120}];
-const order={id:'o1',orderNo:'WO1',partCode:'P1',name:'拉杆',drawingNo:'001-Ab',qty:10,done:0,status:'待排'};
+const order={id:'o1',orderNo:'WO1',partCode:'P1',name:'拉杆',drawingNo:'001-Ab',due:'2026-09-10',qty:10,done:0,status:'待排'};
 const part={code:'P1',name:'拉杆',category:'拉杆',workers:[],unit:10};
 const rows=[{orderId:'o1',orderNo:'WO1',partCode:'P1',date:'2026-09-01',worker:'A',amount:40,capacity:100},{orderId:'o2',orderNo:'WO2',partCode:'P1',date:'2026-09-01',worker:'B',amount:30,capacity:100}];
 const assign=(id='b',transfer=false,inputRows=rows)=>assignOrderWorker(order,[order],inputRows,workers,id,'人工核对图纸','负责人','now',transfer);
@@ -61,7 +61,7 @@ test('single-row edit resolves displayed copy to stored row and saves correct em
  vm.createContext(ui);vm.runInContext(ts.transpileModule(source.split(/\r?\n/).find(l=>l.includes('async function editAllocation(')),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,ui);
  await ui.editAllocation(displayed[0]);assert.equal(saved.allocations[0].worker,'B');assert.equal(saved.allocations[0].amount,40);assert.equal(saved.allocations[1],rows[1]);assert.equal(rows[0].worker,'A');
 });
-const context={rankedOrderCandidates:rulesModule.exports.rankedOrderCandidates,isExternal:p=>p?.processMode==='external',PLAN_DAYS:6,today:()=> '2026-09-01',addDay:s=>{const d=new Date(s+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)},workday:s=>{const d=new Date(s+'T00:00:00Z');while(d.getUTCDay()===0)d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)}};
+const context={orderDataProblems:rulesModule.exports.orderDataProblems,rankedOrderCandidates:rulesModule.exports.rankedOrderCandidates,isExternal:p=>p?.processMode==='external',PLAN_DAYS:6,today:()=> '2026-09-01',addDay:s=>{const d=new Date(s+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)},workday:s=>{const d=new Date(s+'T00:00:00Z');while(d.getUTCDay()===0)d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)}};
 vm.createContext(context);vm.runInContext(ts.transpileModule(source.slice(source.indexOf('function schedule('),source.indexOf('export default function SchedulerApp')),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
 test('actual scheduler retains order-specific choice across replan without changing same-part jobs',()=>{const result=context.schedule({workers,parts:[part],orders:[{...assign().order,due:'2026-09-10'},{...order,id:'o2',orderNo:'WO2',due:'2026-09-10'}]},false);assert.ok(result.allocations.some(a=>a.orderId==='o1'));assert.ok(result.allocations.filter(a=>a.orderId==='o1').every(a=>a.worker==='B'));assert.ok(result.allocations.filter(a=>a.orderId==='o2').every(a=>a.worker==='A'));assert.equal(result.allocations.reduce((n,a)=>n+a.amount,0),200)});
 test('actual six-day scheduler includes Saturday between Friday and Monday',()=>{

@@ -9,7 +9,8 @@ const modules = new Map();
 const appDir = fileURLToPath(new URL('../app/', import.meta.url));
 
 export function loadUi(name) {
-  return load(resolve(appDir, name + '.tsx'));
+  const base = resolve(appDir, name);
+  return load(existsSync(base + '.tsx') ? base + '.tsx' : base + '.ts');
 }
 
 function load(file) {

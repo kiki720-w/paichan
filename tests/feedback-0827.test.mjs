@@ -13,7 +13,7 @@ const plain=x=>JSON.parse(JSON.stringify(x));
 const workers=[{id:'normal',active:true,skills:['顶尖','本体','拉杆']},{id:'special',active:true,skills:['格里森拉杆','珩齿拉杆']},{id:'off',active:false,skills:['顶尖']}];
 const part=(name,ids=[])=>({name,category:name,workers:ids,processMode:'internal'});
 const ids=x=>plain(x.map(w=>w.id));
-const order={id:'o1',orderNo:'WO-1',partCode:'P1',name:'顶尖',qty:10,done:0,status:'待排',customer:'A',due:'2026-09-01'};
+const order={id:'o1',orderNo:'WO-1',partCode:'P1',name:'顶尖',qty:10,done:0,status:'待排',customer:'A',due:'2026-09-01',drawingNo:'D-001'};
 test('drawing aliases preserve exact drawing, missing data stays empty',()=>{assert.equal(drawingFromRow({'图号':' 130H-01 '}),'130H-01');assert.equal(drawingFromRow({'图纸编号':'A-02'}),'A-02');assert.equal(drawingFromRow({'物料编码':'P1'}),'');});
 test('ordinary category matches top/bottom/alloy/tailstock centers and prefixed bodies',()=>{for(const n of ['顶尖','上顶尖','下顶尖','合金顶尖','尾架顶尖','夹具本体'])assert.deepEqual(ids(matchWorkers(part(n),workers)),['normal']);});
 test('special lines do not fall through to generic rod operators',()=>{for(const n of ['格里森拉杆','珩齿拉杆'])assert.deepEqual(ids(matchWorkers(part(n),workers)),['special']);assert.deepEqual(ids(matchWorkers(part('拉杆'),workers)),['normal']);assert.deepEqual(ids(matchWorkers(part('格里森拉杆'),[workers[0]])),[]);});
@@ -36,12 +36,28 @@ test('decreasing completed total does not invent allocations or alter other jobs
 
 const appSource=readFileSync(new URL('../app/scheduler-app.tsx',import.meta.url),'utf8');
 const engineSource=appSource.slice(appSource.indexOf('function schedule('),appSource.indexOf('export default function SchedulerApp'));
-const engineContext={matchWorkers,rankedOrderCandidates,matchingWorkers:matchWorkers,isExternal:p=>p?.processMode==='external',PLAN_DAYS:6,today:()=> '2026-08-27',addDay:s=>{const d=new Date(s+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)},workday:s=>{let d=new Date(s+'T00:00:00Z');while(d.getUTCDay()===0)d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)}};
+const engineContext={orderDataProblems:rulesModule.exports.orderDataProblems,matchWorkers,rankedOrderCandidates,matchingWorkers:matchWorkers,isExternal:p=>p?.processMode==='external',PLAN_DAYS:6,today:()=> '2026-08-27',addDay:s=>{const d=new Date(s+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)},workday:s=>{let d=new Date(s+'T00:00:00Z');while(d.getUTCDay()===0)d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)}};
 vm.createContext(engineContext);vm.runInContext(ts.transpileModule(engineSource,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,engineContext);
 test('scheduler honors preferred staff and falls back only when they cannot cover the plan',()=>{const rule={id:'r',category:'底座',operator:'lte',threshold:35,workerIds:['preferred'],mode:'preferred'},job={...order,name:'底座',partCode:'BASE'},partRow={...part('底座'),code:'BASE',unit:10},fallback={id:'fallback',name:'候补',active:true,skills:['底座'],capacity:100,overtime:100},preferred={id:'preferred',name:'首选',active:true,skills:[],capacity:100,overtime:100};let result=engineContext.schedule({workers:[preferred,fallback],parts:[partRow],orders:[job],hourTierRules:[rule]},false);assert.ok(result.allocations.every(a=>a.worker==='首选'));result=engineContext.schedule({workers:[{...preferred,capacity:0},fallback],parts:[partRow],orders:[job],hourTierRules:[rule]},false);assert.ok(result.allocations.every(a=>a.worker==='候补'));result=engineContext.schedule({workers:[{...preferred,capacity:10},fallback],parts:[partRow],orders:[job],hourTierRules:[{...rule,mode:'exclusive'}]},false);assert.ok(result.allocations.every(a=>a.worker==='首选'));assert.ok(result.shortages.length)});
 test('actual scheduler preserves six workdays, explicit assignment, quantity and drawing',()=>{const state={workers:[{...workers[0],capacity:50,overtime:60,name:'测试员'}],parts:[{...part('顶尖',['normal']),code:'P1',unit:10,drawingNo:'D-01'}],orders:[{...order,drawingNo:'ORDER-D'}]};const result=engineContext.schedule(state,false);assert.equal(result.allocations.length,2);assert.equal(result.allocations.reduce((n,a)=>n+a.amount,0),100);assert.ok(result.allocations.every(a=>a.worker==='测试员'&&a.drawingNo==='ORDER-D'&&a.orderId==='o1'));assert.equal(result.shortages.length,0);});
 test('actual scheduler only schedules remaining quantity and excludes fully completed jobs',()=>{const state={workers:[{...workers[0],capacity:50,overtime:60,name:'测试员'}],parts:[{...part('顶尖'),code:'P1',unit:10}],orders:[recordCompletion(order,4,'人','登记','now')]};assert.equal(engineContext.schedule(state).allocations.reduce((n,a)=>n+a.amount,0),60);state.orders=[recordCompletion(order,10,'人','登记','now')];assert.equal(engineContext.schedule(state).allocations.length,0);assert.equal(engineContext.schedule(state).shortages.length,0);});
 test('actual scheduler keeps shortage reporting and daily capacity bounds',()=>{const state={workers:[{...workers[0],capacity:10,overtime:12,name:'测试员'}],parts:[{...part('顶尖'),code:'P1',unit:10}],orders:[order]};const result=engineContext.schedule(state);assert.equal(result.allocations.length,6);assert.ok(result.allocations.every(a=>a.amount<=10));assert.equal(result.shortages[0].remainingWork,40);assert.equal(result.shortages[0].remainingQty,4);});
+test('required data blocks automatic allocation until repaired and reports specific reasons',()=>{
+ const job={...order,due:'',drawingNo:''}, good={...order,id:'o2',orderNo:'WO-2',drawingNo:'D-2'};
+ const state={workers:[{...workers[0],capacity:200,overtime:200,name:'测试员'}],parts:[{...part('顶尖'),code:'P1',unit:10}],orders:[job,good]};
+ const plan=engineContext.schedule(state);
+ assert.deepEqual(plain(plan.allocations.map(a=>a.orderId)),['o2']);
+ assert.match(plan.blocked[0].reason,/缺少交期.*缺少图号/);
+ assert.equal(plan.shortages.length,0);
+ const repaired=engineContext.schedule({...state,orders:[{...job,due:'2026-09-01',drawingNo:'D-1'},good]});
+ assert.deepEqual(plain(repaired.allocations.map(a=>a.orderId)),['o1','o2']);
+ assert.equal(repaired.blocked.length,0);
+});
+test('readiness rejects invalid calendar dates, quantities and quota but accepts a drawing from the part',()=>{
+ const problems=rulesModule.exports.orderDataProblems;
+ assert.deepEqual(plain(problems({...order,due:'2026-02-30',qty:0,drawingNo:'  '},{unit:0,drawingNo:'P-DWG'})),['交期无效','订单数量无效','缺少有效单件工时']);
+ assert.deepEqual(plain(problems({...order,drawingNo:''},{unit:1.5,drawingNo:'P-DWG'})),[]);
+});
 const ui={React,useRef:React.useRef,completionStatus,allocationBelongsTo:rulesModule.exports.allocationBelongsTo,PLAN_DAYS:6,formatLocalDate:d=>d.toISOString().slice(0,10),addDay:(s,n=1)=>{const d=new Date(s+'T00:00:00');d.setDate(d.getDate()+n);return d.toISOString().slice(0,10)}};
  vm.createContext(ui);vm.runInContext(ts.transpileModule(appSource.slice(appSource.indexOf('function Metric(')),{fileName:'components.tsx',compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React}}).outputText,ui);
 test('history retains the drawing number and stays read-only',()=>{

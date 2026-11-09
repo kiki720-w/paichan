@@ -6,6 +6,21 @@ type Job={id:string;orderNo:string;partCode:string;name:string;qty:number;done:n
 type SkillWorker={id:string;name?:string;active:boolean;skills:string[]};
 type SkillPart={name:string;category:string;unit?:number;workers:string[];processMode?:string};
 const text=(v:unknown)=>String(v??'').trim();
+function validWorkDate(value:string){
+ const date=Date.parse(value+'T00:00:00Z');
+ return /^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(date)&&new Date(date).toISOString().slice(0,10)===value;
+}
+export function orderDataProblems(order:Pick<Job,'due'|'drawingNo'|'qty'|'done'>,part?:{drawingNo?:string;unit?:number}){
+ const problems:string[]=[];
+ const due=text(order.due);
+ if(!due)problems.push('缺少交期');
+ else if(!validWorkDate(due))problems.push('交期无效');
+ if(!text(order.drawingNo)&&!text(part?.drawingNo))problems.push('缺少图号');
+ if(!Number.isFinite(order.qty)||order.qty<=0||order.qty<order.done)problems.push('订单数量无效');
+ const unit=part?.unit??0;
+ if(!Number.isFinite(unit)||unit<=0)problems.push('缺少有效单件工时');
+ return problems;
+}
 export function drawingFromRow(row:Record<string,unknown>){
  const names=new Set(['图号','图纸编号','图纸号','零件图号','产品图号','图号(drawingno)','图号(drawingnumber)']);
  for(const [key,value] of Object.entries(row))if(names.has(key.replace(/\s/g,'').toLowerCase())&&text(value))return text(value);
@@ -89,8 +104,8 @@ export function planOrderTransfer<A extends {orderId?:string;orderNo:string;part
  if(!Number.isFinite(unit)||unit<=0)throw new Error('缺少有效单件定额，无法顺延，请先补齐工件资料');
  const required=(order.qty-order.done)*unit;
  if(order.status==='已完成'||!Number.isFinite(required)||required<=0)throw new Error('该订单没有可安排的剩余工作量');
- const validDate=(s:string)=>/^\d{4}-\d{2}-\d{2}$/.test(s)&&Number.isFinite(Date.parse(s+'T00:00:00Z'))&&new Date(s+'T00:00:00Z').toISOString().slice(0,10)===s;
- if(!validDate(startDate)||!order.due||!validDate(order.due))throw new Error('开始日期或订单交期无效，请先补齐日期');
+ if(!validWorkDate(startDate)||!order.due||!validWorkDate(order.due))throw new Error('开始日期或订单交期无效，请先补齐日期');
+ if(!text(order.drawingNo))throw new Error('缺少图号，无法转派并顺延');
  if(rows.some(a=>!a.orderId&&a.orderNo===order.orderNo&&a.partCode===order.partCode&&!allocationBelongsTo(a,order,orders)))throw new Error('旧派工无法唯一对应订单，请先核对订单编号');
  const others=rows.filter(a=>!allocationBelongsTo(a,order,orders));
  const loads=new Map<string,number>();

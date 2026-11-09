@@ -2,7 +2,7 @@ import {mioraPages, type Factory} from './miora-shell';
 
 type Summary = {orders: number; workers: number; parts: number; allocations: number; lastRun: string};
 type LoadDay = {date: string; work: number; capacity: number};
-type Issue = {key: string; partCode: string; name: string; reason: string};
+type Issue = {key: string; orderNo?: string; partCode: string; name: string; reason: string};
 type GuideStep = {tab: string; title: string; body: string; tip: string};
 
 export function MioraDashboard({factory, summaries, metrics, load, issues, shortage, status, onNavigate, onIssues}: {
@@ -50,8 +50,8 @@ export function MioraDashboard({factory, summaries, metrics, load, issues, short
     </div>
     <section className="panel">
       <div className="panel-title"><div><small>进入排产前补齐资料</small><h3>资料待确认</h3></div>{issues.length > 0 && <button type="button" className="import" onClick={onIssues}>核对 {issues.length} 项</button>}</div>
-      {issues.length ? <div className="table-wrap"><table><thead><tr><th>物料</th><th>工件</th><th>待确认原因</th></tr></thead>
-        <tbody>{issues.slice(0, 5).map(issue => <tr key={issue.key}><td className="mono">{issue.partCode}</td><td>{issue.name}</td><td>{issue.reason}</td></tr>)}</tbody></table></div>
+      {issues.length ? <div className="table-wrap"><table><thead><tr><th>订单号</th><th>物料</th><th>工件</th><th>待确认原因</th></tr></thead>
+        <tbody>{issues.slice(0, 5).map(issue => <tr key={issue.key}><td className="mono">{issue.orderNo||'—'}</td><td className="mono">{issue.partCode}</td><td>{issue.name}</td><td>{issue.reason}</td></tr>)}</tbody></table></div>
         : <div className="empty">当前没有待确认资料。</div>}
     </section>
   </>;

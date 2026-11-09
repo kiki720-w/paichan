@@ -84,3 +84,15 @@ test('weekly plan groups real allocations by person and date without mixing the 
   assert.match(html, /D-009/);
   assert.match(html, /完工 0\/15/);
 });
+
+test('the daily dispatch export is available only for a selected day that has allocations', () => {
+  const {MioraPlan} = loadUi('miora-plan');
+  const props = {
+    rows: [allocation], dates: ['2026-11-10', '2026-11-11'], status: '草稿', shortages: [], issues: [],
+    view: 'day', day: '2026-11-10', onView() {}, onDay() {}, onIssues() {}, onExportDay() {},
+  };
+  const render = overrides => renderToStaticMarkup(React.createElement(MioraPlan, {...props, ...overrides}));
+  assert.match(render({}), /<button[^>]*class="import"[^>]*>导出当日派工单/);
+  assert.match(render({day: '2026-11-11'}), /<button[^>]*disabled=""[^>]*>导出当日派工单/);
+  assert.doesNotMatch(render({view: 'week'}), /导出当日派工单/);
+});
