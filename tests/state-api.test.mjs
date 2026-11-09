@@ -47,10 +47,10 @@ test('client waits for durable acknowledgement and does not update state on fail
  const app=readFileSync(new URL('../app/scheduler-app.tsx',import.meta.url),'utf8');
  const line=app.split(/\r?\n/).find(l=>l.includes('async function persist('));
  let resolveFetch,displayed,request;
- const ui={activeFactory:'xingping',stateRevision:4,factoryName:()=> '工厂',setNotice(){},setTimeout(){},normalizeState:s=>s,summaryOf:()=>({}),setData:s=>{displayed=s;},setStateRevision(){},setAuditLog(){},setFactorySummaries(){},fetch:async(url,options)=>{request=options;return new Promise(resolve=>{resolveFetch=resolve;});}};
+ const ui={activeFactory:'xingping',stateRevision:4,pendingSaves:{current:0},factoryName:()=> '工厂',setNotice(){},setTimeout(){},normalizeState:s=>s,summaryOf:()=>({}),setData:s=>{displayed=s;},setStateRevision(){},setAuditLog(){},setFactorySummaries(){},fetch:async(url,options)=>{request=options;return new Promise(resolve=>{resolveFetch=resolve;});}};
  vm.createContext(ui);vm.runInContext(ts.transpileModule(line,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,ui);
  const next={allocations:[{worker:'杨超'}]};let saving=ui.persist(next);
- assert.equal(displayed,undefined);assert.equal(request.headers.prefer,'return=minimal');
+ assert.equal(displayed,undefined);assert.equal(request.headers.prefer,'return=minimal');assert.equal(ui.pendingSaves.current,1);
  resolveFetch(Response.json({ok:true,revision:5,audit:[]}));assert.equal(await saving,true);assert.equal(displayed,next);
- displayed=undefined;saving=ui.persist(next);resolveFetch(Response.json({error:'storage_failure'},{status:500}));assert.equal(await saving,false);assert.equal(displayed,undefined);
+ displayed=undefined;saving=ui.persist(next);resolveFetch(Response.json({error:'storage_failure'},{status:500}));assert.equal(await saving,false);assert.equal(displayed,undefined);assert.equal(ui.pendingSaves.current,0);
 });

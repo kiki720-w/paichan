@@ -176,6 +176,49 @@ button.ok, button.pending, button.late { min-height: 25px; align-items: center; 
 .assignment-mode label { display: flex; gap: 6px; }
 .assignment-mode input { align-self: start; margin-top: 5px; }
 .assignment-mode small { display: block; }
+.miora-factory-comparison { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); border-top: 1px solid var(--rule); }
+.miora-factory-comparison article { padding: 12px; }
+.miora-factory-comparison article + article { border-left: 1px solid var(--rule); }
+.miora-factory-comparison dl { margin: 0; display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 8px; }
+.miora-factory-comparison dt { color: var(--muted); font-size: 10px; }
+.miora-factory-comparison dd { margin: 2px 0; font: 17px var(--mono); }
+.miora-board-grid { display: grid; grid-template-columns: minmax(0, 1.85fr) minmax(0,1fr); gap: 14px; }
+.miora-load { display: grid; gap: 7px; }
+.miora-load-row { display: grid; grid-template-columns: 44px minmax(0,1fr) 112px; align-items: center; gap: 8px; font: 11px var(--mono); }
+.miora-load-row code { text-align: right; }
+.miora-load-track { height: 10px; position: relative; background: #ebe6dc; }
+.miora-load-track span, .miora-load-track b { position: absolute; inset: 0 auto 0 0; }
+.miora-load-track span { background: #d7d0c3; }
+.miora-load-track b { background: var(--accent); opacity: .82; }
+.miora-guide-list { list-style: none; padding: 0; margin: 0; }
+.miora-guide-list li { display: grid; grid-template-columns: 32px minmax(0,1fr) auto; align-items: start; gap: 12px; border-top: 1px solid var(--rule); padding-block: 12px; }
+.miora-guide-list p { margin: 3px 0; }
+.miora-guide-list .mono { color: var(--accent); }
+.miora-dropzone { display: grid; justify-items: center; gap: 8px; border: 1px dashed #bbb1a3; background: var(--surface); padding: 26px 12px; text-align: center; }
+.miora-file-action { position: relative; cursor: pointer; }
+.miora-file-action input { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: pointer; }
+.miora-file-action:focus-within { outline: 2px solid var(--accent); outline-offset: 3px; }
+.miora-plan-band { display: grid; grid-template-columns: repeat(auto-fit,minmax(118px,1fr)); border-block: 1px solid var(--rule); }
+.miora-plan-band > div { padding: 11px; }
+.miora-plan-band > div + div { border-left: 1px solid var(--rule); }
+.miora-plan-band small { display: block; margin-bottom: 6px; }
+.miora-plan-band strong { font: 550 23px var(--mono); }
+.miora-matrix table { min-width: 790px; table-layout: fixed; }
+.miora-matrix th { width: 116px; }
+.miora-matrix thead th:first-child, .miora-matrix tbody th { width: 90px; position: sticky; left: 0; z-index: 1; }
+.miora-matrix td { border-left: 1px solid var(--rule); padding: 5px; }
+.miora-task { border-left: 2px solid var(--ok); background: #edf1e8; margin-bottom: 5px; padding: 5px; color: var(--ink); }
+.miora-task-late { border-color: var(--accent); background: #faeee6; }
+.miora-task summary { cursor: pointer; overflow-wrap: anywhere; font-size: 11px; }
+.miora-task summary span { display: block; }
+.miora-task-detail { display: grid; gap: 3px; overflow-wrap: anywhere; }
+.miora-task-detail button { min-height: 24px; padding: 2px 5px; font-size: 10px; }
+.miora-daily-tasks { display: grid; grid-template-columns: repeat(auto-fit,minmax(118px,1fr)); gap: 4px; }
+.orders-compact-table { min-width: 760px; }
+.order-row-selected td { background: #f2e9dc; }
+.priority { border: 1px solid var(--rule); padding: 0 4px; font: 10px var(--mono); }
+.priority.p1 { color: var(--danger); }
+.priority.p2 { color: var(--warn); }
 @media (max-width: 1050px) {
   .miora-header { align-items: start; flex-direction: column; }
   .miora-actions { justify-content: start; }
@@ -196,4 +239,8 @@ button.ok, button.pending, button.late { min-height: 25px; align-items: center; 
   .miora-login-foot { display: none; }
   .miora-login-access { display: block; }
   .miora-login-box { margin: auto; }
+  .miora-board-grid { grid-template-columns: minmax(0,1fr); }
+  .miora-factory-comparison dl { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .miora-guide-list li { grid-template-columns: 22px minmax(0,1fr); }
+  .miora-guide-list button { grid-column: 2; justify-self: start; }
 }

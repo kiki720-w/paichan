@@ -43,12 +43,10 @@ test('actual scheduler preserves six workdays, explicit assignment, quantity and
 test('actual scheduler only schedules remaining quantity and excludes fully completed jobs',()=>{const state={workers:[{...workers[0],capacity:50,overtime:60,name:'测试员'}],parts:[{...part('顶尖'),code:'P1',unit:10}],orders:[recordCompletion(order,4,'人','登记','now')]};assert.equal(engineContext.schedule(state).allocations.reduce((n,a)=>n+a.amount,0),60);state.orders=[recordCompletion(order,10,'人','登记','now')];assert.equal(engineContext.schedule(state).allocations.length,0);assert.equal(engineContext.schedule(state).shortages.length,0);});
 test('actual scheduler keeps shortage reporting and daily capacity bounds',()=>{const state={workers:[{...workers[0],capacity:10,overtime:12,name:'测试员'}],parts:[{...part('顶尖'),code:'P1',unit:10}],orders:[order]};const result=engineContext.schedule(state);assert.equal(result.allocations.length,6);assert.ok(result.allocations.every(a=>a.amount<=10));assert.equal(result.shortages[0].remainingWork,40);assert.equal(result.shortages[0].remainingQty,4);});
 const ui={React,useRef:React.useRef,completionStatus,allocationBelongsTo:rulesModule.exports.allocationBelongsTo,PLAN_DAYS:6,formatLocalDate:d=>d.toISOString().slice(0,10),addDay:(s,n=1)=>{const d=new Date(s+'T00:00:00');d.setDate(d.getDate()+n);return d.toISOString().slice(0,10)}};
- vm.createContext(ui);vm.runInContext(ts.transpileModule(appSource.slice(appSource.indexOf('function ShortagePanel(')),{fileName:'components.tsx',compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React}}).outputText,ui);
-test('weekly and daily tables render drawing and completion controls without changing history controls',()=>{
+ vm.createContext(ui);vm.runInContext(ts.transpileModule(appSource.slice(appSource.indexOf('function Metric(')),{fileName:'components.tsx',compilerOptions:{target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.React}}).outputText,ui);
+test('history retains the drawing number and stays read-only',()=>{
  const rows=[{orderId:'o1',orderNo:'WO-1',partCode:'P1',name:'顶尖',drawingNo:'D-001',date:'2026-08-27',worker:'测试员',amount:40,capacity:50,due:'2026-09-01',status:'按期'}];
- for(const C of [ui.WeeklySchedule,ui.GroupedSchedule]){const html=renderToStaticMarkup(React.createElement(C,{rows,orders:[order],onEdit:()=>{},onComplete:()=>{}}));assert.match(html,/D-001/);assert.match(html,/登记完工/);assert.match(html,/未开工/);assert.match(html,/人工调整/);assert.match(html,/aria-label="人员排产明细" tabindex="0"/);assert.match(html,/人员排产明细向右滚动/);}
- for(const C of [ui.WeeklySchedule,ui.GroupedSchedule]){const html=renderToStaticMarkup(React.createElement(C,{rows,onAssign:()=>{}}));assert.match(html,/更换员工/);assert.match(html,/schedule-worker-cell/);}
- const history=renderToStaticMarkup(React.createElement(ui.GroupedSchedule,{rows}));assert.doesNotMatch(history,/登记完工|人工调整|更换员工/);assert.match(history,/D-001/);
+ const history=renderToStaticMarkup(React.createElement(ui.HistorySchedule,{rows}));assert.doesNotMatch(history,/登记完工|人工调整|更换员工|整单转派/);assert.match(history,/D-001/);
 });
 
 test('order search renders a compact labelled field, result count, clear action and empty matches',()=>{
