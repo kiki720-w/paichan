@@ -1,5 +1,5 @@
 import {env} from 'cloudflare:workers';
-import {getSession} from '../access';
+import {getSession,sessionCookie} from '../access';
 import {savePassword,verifyPassword} from '../passwords';
 
 export async function POST(req:Request){
@@ -14,6 +14,6 @@ export async function POST(req:Request){
   const fallback=session.role==='main'?config.APP_PASSWORD:session.factory==='xian'?config.XIAN_PASSWORD:config.XINGPING_PASSWORD;
   if(!await verifyPassword(session.username,currentPassword,fallback))return Response.json({error:'当前密码不正确'},{status:403});
   await savePassword(session.username,newPassword);
-  return Response.json({ok:true},{headers:{'set-cookie':'xuheng_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0'}});
+  return Response.json({ok:true},{headers:{'set-cookie':sessionCookie('',req,0)}});
  }catch{return Response.json({error:'密码修改失败，请稍后重试'},{status:500})}
 }

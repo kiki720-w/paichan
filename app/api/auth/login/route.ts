@@ -13,6 +13,6 @@ export async function POST(req:Request){
   ];
   const account=accounts.find(x=>x.username&&x.password&&x.token&&username===x.username);
   if(!account||!password||!await verifyPassword(account.username!,password,account.password))return Response.json({error:'账号或密码错误'},{status:401});
-  return Response.json({ok:true},{headers:{'set-cookie':sessionCookie(account.token!)}});
+  return Response.json({ok:true},{headers:{'set-cookie':sessionCookie(account.token!,req)}});
  }catch{return Response.json({error:'登录请求无效'},{status:400})}
 }

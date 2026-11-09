@@ -1,1 +1,3 @@
-export function POST(){return Response.json({ok:true},{headers:{'set-cookie':'xuheng_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0'}})}
+import {sessionCookie} from '../access';
+
+export function POST(req:Request){return Response.json({ok:true},{headers:{'set-cookie':sessionCookie('',req,0)}})}

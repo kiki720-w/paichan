@@ -18,4 +18,9 @@ export function resolveFactory(req:Request,session:Session):Factory{
  return new URL(req.url).searchParams.get('factory')==='xian'?'xian':'xingping';
 }
 
-export function sessionCookie(token:string){return `xuheng_session=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=28800`}
+export function sessionCookie(token:string,req:Request,maxAge=28800){
+ const url=new URL(req.url);
+ const localHttp=process.env.NODE_ENV==='development'&&url.protocol==='http:'&&
+  (url.hostname==='127.0.0.1'||url.hostname==='localhost'||url.hostname==='[::1]');
+ return `xuheng_session=${encodeURIComponent(token)}; Path=/; HttpOnly;${localHttp?'':' Secure;'} SameSite=Strict; Max-Age=${maxAge}`;
+}
