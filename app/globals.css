@@ -217,6 +217,8 @@ button.ok, button.pending, button.late { min-height: 25px; align-items: center; 
 .orders-compact-table { min-width: 760px; }
 .order-row-selected td { background: #f2e9dc; }
 .priority { border: 1px solid var(--rule); padding: 0 4px; font: 10px var(--mono); }
+button.priority { background: transparent; min-height: 24px; white-space: nowrap; }
+button.priority:hover { border-color: var(--accent); }
 .priority.p1 { color: var(--danger); }
 .priority.p2 { color: var(--warn); }
 @media (max-width: 1050px) {

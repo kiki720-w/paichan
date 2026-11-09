@@ -31,9 +31,9 @@
 
 **Interfaces:** `MioraShell` consumes current page, account role, factory, authorized switch callback, navigation and slots. Login consumes the existing authenticated flow, never prototype URL-based role simulation.
 
-- [ ] Test server-rendered shell for dashboard-only and role-scoped factory controls, current navigation, and actual login form.
-- [ ] Observe RED; port prototype shell, account controls, palette, local fonts/icon treatment, responsive navigation and shared styles.
-- [ ] Run the new tests and commit on the isolated feature branch.
+- [x] Test server-rendered shell for dashboard-only and role-scoped factory controls, current navigation, and actual login form.
+- [x] Observe RED; port prototype shell, account controls, palette, local fonts/icon treatment, responsive navigation and shared styles.
+- [x] Run the new tests and commit on the isolated feature branch.
 
 ### Task 2: Live business pages
 
@@ -41,12 +41,20 @@
 
 **Interfaces:** Existing real app state, calculations, persistence and mutations. Reusable page masthead/table/action primitives use typed props.
 
-- [ ] Test empty and populated schedules, shortages, actionable exceptions, and scope reset.
-- [ ] Observe RED; replace dashboard, import, orders, schedule, tasks, alerts, capacity, quota, rules, history, guide and product map views. Retain real handlers and distinguish plan vs order states.
-- [ ] Run UI and domain tests; review removal of unreachable old UI and commit on feature branch.
+- [x] Test empty and populated schedules, shortages, actionable exceptions, and scope reset.
+- [x] Observe RED; replace dashboard, import, orders, schedule, tasks, alerts, capacity, quota, rules, history, guide and product map views. Retain real handlers and distinguish plan vs order states.
+- [x] Run UI and domain tests; review removal of unreachable old UI and commit on feature branch.
 
 ### Task 3: Local integration verification
 
-- [ ] Build with Vinext; run business, state API and rendered UI tests. Record baseline mismatches rather than hiding them.
-- [ ] Verify real Excel import, assignment, schedule, confirmation, publication, export, completion and factory separation using an isolated local store. Inspect visual fidelity against the Miora ZIP at the same viewport.
-- [ ] Record verified behavior and open blockers. Do not merge, deploy or modify the official service.
+- [x] Build with Vinext; run business, state API and rendered UI tests. Replace obsolete starter-page assertions with APS route rendering tests.
+- [x] Verify real Excel import, priority, assignment, schedule, confirmation, publication, export, completion and factory separation using isolated D1 and a DOM integration harness.
+- [ ] Inspect visual fidelity against the Miora ZIP at the same viewport. Blocked: browser control could not initialize; the DOM harness does not verify layout or appearance.
+- [x] Record verified behavior and open blockers. Do not merge, deploy or modify the official service.
+
+## Execution notes
+
+- Ruling: The desktop worktree tool did not complete; Git created a sibling worktree on `codex/miora-ui` to keep the dirty main checkout untouched.
+- Ruling: Reuse locally installed dependency packages through worktree links. The npm lock was missing SheetJS entries; the isolated checkout used no installation changes to main or shared lockfiles.
+- Ruling: Historical snapshots keep independent status; only the snapshot tied to the current plan can update its status. Reimport clears invalidated current allocations and state, not historical snapshots.
+- Independent review found overlapping refresh/switch, historical status cross-talk, and invisible modal errors. The local DOM/HTTP regression checks were rerun after fixing all three.

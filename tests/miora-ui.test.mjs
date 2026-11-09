@@ -46,6 +46,16 @@ test('the login shell uses account credentials and no simulated role switch', ()
 const shortage = {orderId: 'o1', orderNo: 'WO-009', partCode: 'P-1', name: '底座', due: '2026-11-12', remainingWork: 18, remainingQty: 6, requiredWork: 45, scheduledWork: 27, reason: '六工作日产能不足'};
 const allocation = {date: '2026-11-10', worker: '示例员工', orderNo: 'WO-009', partCode: 'P-1', name: '底座', drawingNo: 'D-009', amount: 27, capacity: 30, due: '2026-11-12', status: '按期'};
 
+test('only the snapshot belonging to the current plan controls its status', () => {
+  const {currentPlanSnapshot} = loadUi('miora-plan');
+  const old = {id:'A', createdAt:'one', publishedAt:'two', status:'已发布'};
+  const current = {id:'B', createdAt:'three', status:'已确认'};
+  assert.equal(currentPlanSnapshot({planStatus:'草稿', planSnapshotId:'A', history:[current,old]}), undefined);
+  assert.equal(currentPlanSnapshot({planStatus:'已确认', planSnapshotId:'B', history:[old,current]}), current);
+  assert.equal(currentPlanSnapshot({planStatus:'已发布', planUpdatedAt:'two', history:[old]}), old);
+  assert.equal(currentPlanSnapshot({planStatus:'已发布', planUpdatedAt:'unrelated', history:[old,current]}), undefined);
+});
+
 test('capacity gaps and missing data stay visible even when nothing was allocated', () => {
   const {MioraPlan} = loadUi('miora-plan');
   const html = renderToStaticMarkup(React.createElement(MioraPlan, {

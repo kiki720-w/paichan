@@ -11,6 +11,18 @@ type Shortage = {
   reason: string; drawingNo?: string; suggestedWorker?: string; estimatedFinish?: string;
 };
 type Issue = {key: string; partCode: string; name: string; reason: string};
+type Snapshot = {id: string; createdAt: string; status?: string; publishedAt?: string; withdrawnAt?: string};
+
+export function currentPlanSnapshot<T extends Snapshot>({planStatus, planSnapshotId, planUpdatedAt, history}: {
+  planStatus?: string; planSnapshotId?: string; planUpdatedAt?: string; history?: T[];
+}): T | undefined {
+  if (!history?.length || !['已确认', '已发布', '已撤回'].includes(planStatus ?? '')) return;
+  const candidates = history.filter(row => (row.status ?? '已确认') === planStatus);
+  if (planSnapshotId) return candidates.find(row => row.id === planSnapshotId);
+  if (!planUpdatedAt) return;
+  const legacy = candidates.filter(row => (planStatus === '已发布' ? row.publishedAt : planStatus === '已撤回' ? row.withdrawnAt : row.createdAt) === planUpdatedAt);
+  return legacy.length === 1 ? legacy[0] : undefined;
+}
 type PlanProps<T extends Dispatch> = {
   rows: T[]; dates: string[]; view: 'week' | 'day'; day: string; status: string;
   shortages: Shortage[]; issues: Issue[]; updated?: string; changeNote?: string;
