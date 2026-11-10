@@ -103,6 +103,7 @@ input[readonly], input:disabled { background: var(--surface); }
 .panel-title { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 13px; }
 .panel-title h3, .form-panel h3, .miora-subtitle { font: 550 16px/1.35 var(--serif); }
 .panel-title small, .form-panel > small { display: block; font-size: 10px; }
+.panel-count { margin-top: 3px; color: var(--secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
 .compact-page { display: grid; gap: 14px; }
 .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(245px, .38fr); align-items: start; gap: 14px; }
 .split > * { min-width: 0; }

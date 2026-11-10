@@ -6,6 +6,7 @@ import {MioraDashboard, MioraGuide, MioraProductMap} from './miora-workspace';
 import {currentPlanSnapshot, MioraPlan} from './miora-plan';
 import {buildDailyDispatch} from './dispatch-export';
 import {buildOrderTemplate} from './order-template';
+import {applyMasterDataWorkbook,buildMasterDataTemplate,type MasterDataKind} from './master-data-import';
 import {MioraGapDialog} from './miora-gap-dialog';
 import {setDispatchSlot,shiftDispatchSlot,validateWorkingWindows,type previewBatchGaps} from './scheduling-operations';
 import type {MesSyncState} from './server/mes-source';
@@ -211,6 +212,8 @@ export default function SchedulerApp(){
  const [loginForm,setLoginForm]=useState({username:'',password:''});
  const [passwordDialog,setPasswordDialog]=useState(false),[passwordForm,setPasswordForm]=useState({currentPassword:'',newPassword:'',confirmPassword:''}),[passwordError,setPasswordError]=useState('');
  const [guideStep,setGuideStep]=useState<number|null>(null);
+ const masterImportFile=useRef<HTMLInputElement>(null);
+ const [masterImportError,setMasterImportError]=useState<{kind:MasterDataKind;message:string}|null>(null);
  const [workerForm,setWorkerForm]=useState({name:'',capacity:'',overtime:'',skills:''});
  const [editingWorkerId,setEditingWorkerId]=useState<string|null>(null);
  const [partForm,setPartForm]=useState({drawingNo:'',code:'',name:'',category:'',operationCode:'TURN',processMode:'internal' as 'internal'|'external',unit:'',workers:[] as string[]});
@@ -343,7 +346,7 @@ export default function SchedulerApp(){
    await loadFactory(factory);
    setOrderFilter('all');setPartSearch('');setNewOrderOpen(false);setCompleting(null);setResolving(null);
    setOrderForm({orderNo:'',customer:'',partCode:'',qty:'',due:'',priority:'3'});
-   cancelWorkerEdit();setEditingPartCode('');setPartForm({drawingNo:'',code:'',name:'',category:'',operationCode:'TURN',processMode:'internal',unit:'',workers:[]});
+   setMasterImportError(null);cancelWorkerEdit();setEditingPartCode('');setPartForm({drawingNo:'',code:'',name:'',category:'',operationCode:'TURN',processMode:'internal',unit:'',workers:[]});
    setHourRuleForm({id:'',category:'',operator:'gt',threshold:'',workerIds:[],mode:'preferred'});
    setResultDay('');setResultView('week');setBatchGapsOpen(false);setNotice(`已切换到${factoryName(factory)}`);
   }catch{setNotice('切换失败，当前仍为原工厂')}finally{setLoading(false);setTimeout(()=>setNotice(''),3200)}
@@ -483,6 +486,49 @@ export default function SchedulerApp(){
   if(!file||importing)return;
   setImporting(true);
   try{await importExcel(file)}catch{setNotice('文件未能导入。请检查 MES 导出格式，现有数据未覆盖。')}finally{setImporting(false)}
+ }
+ function downloadMasterDataTemplate(kind:MasterDataKind){
+  const name=kind==='parts'?'工件定额':'人员产能';
+  try{XLSX.writeFile(buildMasterDataTemplate(kind),`序衡APS-${name}导入模板.xlsx`)}
+  catch{setMasterImportError({kind,message:'模板下载失败，请重试。'})}
+ }
+ async function importMasterData(file:File,kind:MasterDataKind){
+  if(importing||pendingSaves.current||refreshInProgress.current){
+   setMasterImportError({kind,message:'数据正在更新，请稍后再导入。'});return;
+  }
+  setImporting(true);
+  setMasterImportError(null);
+  try{
+   if(!/\.xlsx?$/i.test(file.name)||file.size>8*1024*1024)throw new Error('请选择 8 MB 以内的 .xlsx 或 .xls 文件。');
+   let workbook:XLSX.WorkBook;
+   try{workbook=XLSX.read(await file.arrayBuffer())}
+   catch{throw new Error('无法读取 Excel 文件，请用模板另存后重试。')}
+   const {next,added,updated}=applyMasterDataWorkbook(data,kind,workbook,factoryName(activeFactory));
+   const issues=collectOrderIssues(next),ids=new Set(issues.map(issue=>issue.key));
+   const keys=new Set(issues.map(issue=>JSON.stringify([issue.orderNo,issue.partCode])));
+   const conflict=[...eligibleRows,...eligibleShortfalls].find(row=>row.orderId?ids.has(row.orderId):keys.has(JSON.stringify([row.orderNo,row.partCode])));
+   if(conflict)throw new Error(`本次修改会让订单 ${conflict.orderNo} 的现有派工或缺口无法显示。为保留排产，本次未导入，请核对加工类别和人员产能。`);
+   const name=kind==='parts'?'工件定额':'人员产能';
+   const counts=`新增 ${added} 条，更新 ${updated} 条`;
+   const importLog=[importEntry(file.name,name,added+updated,counts),...(data.importLog||[])].slice(0,30);
+   if(await persist({...next,importLog},`${name}已导入：${counts}。现有排产已保留，下次生成排产时使用新资料。`,`批量导入${name}`)){
+    if(kind==='parts')cancelPartEdit();else cancelWorkerEdit();
+   }else setMasterImportError({kind,message:'导入未确认，请刷新后核对资料再重试。'});
+  }catch(error){setMasterImportError({kind,message:error instanceof Error?error.message:'未能导入，请检查文件后重试。'})}
+  finally{setImporting(false)}
+ }
+ function masterDataActions(kind:MasterDataKind){
+  const name=kind==='parts'?'工件定额':'人员产能';
+  return <div className="miora-actions" aria-busy={importing}>
+   <button type="button" className="import" onClick={()=>downloadMasterDataTemplate(kind)}>下载模板</button>
+   <input ref={masterImportFile} hidden type="file" accept=".xlsx,.xls" aria-label={`选择${name} Excel 文件`} onChange={e=>{
+    const file=e.currentTarget.files?.[0];e.currentTarget.value='';if(file)void importMasterData(file,kind);
+   }}/>
+   <button type="button" className="import" disabled={importing} onClick={()=>masterImportFile.current?.click()}>{importing?'正在导入…':'批量导入 Excel'}</button>
+  </div>;
+ }
+ function masterDataImportError(kind:MasterDataKind){
+  return masterImportError?.kind===kind&&<div className="import-issues login-error" role="alert">{masterImportError.message}</div>;
  }
  async function importExcel(file:File){
   const book=XLSX.read(await file.arrayBuffer(),{cellDates:false});
@@ -628,8 +674,8 @@ export default function SchedulerApp(){
     <details className="panel compact-section"><summary className="compact-summary"><span><b>基础排产规则</b><small>已书面确认</small></span><em>{confirmedRules.length} 条</em></summary><div className="rule-grid compact-rule-grid">{confirmedRules.map(([name,detail])=><article key={name}><b>{name}</b><p>{detail}</p></article>)}</div></details>
     <details className="panel compact-section"><summary className="compact-summary"><span><b>待补数据与接口</b><small>缺失项进入待确认</small></span><em>{pendingConnections.length} 项</em></summary><ul className="pending-list compact-pending-list">{pendingConnections.map(x=><li key={x}>{x}</li>)}</ul></details>
   </div>}
-   {tab==='人员产能'&&<div className="split personnel-layout"><section className="panel personnel-panel"><div className="panel-title"><div><small>按工厂独立维护</small><h3>车工人员与能力</h3></div><span className="ok">{data.workers.length} 人</span></div><div className="table-wrap personnel-table-wrap"><table className="personnel-table"><thead><tr><th>人员</th><th>班组</th><th>日产能</th><th>适合加工</th><th>状态</th><th>操作</th></tr></thead><tbody>{data.workers.map(w=>{const skills=w.skills.join('、')||'根据历史报工整理';return <tr key={w.id}><td><b>{w.name}</b></td><td>{w.team}</td><td><b>{w.capacity||'待确认'}</b><small className="cell-note">加班 {w.overtime||'待确认'}</small></td><td><span className="skills-preview" title={skills}>{skills}</span></td><td><span className={w.active&&w.capacity>0?'ok':'pending'}>{w.active&&w.capacity>0?'已确认':'待确认'}</span></td><td><button type="button" className={w.active&&w.capacity>0?'import':'primary'} onClick={()=>editWorker(w)}>{w.active&&w.capacity>0?'修改':'补充'}</button></td></tr>})}</tbody></table></div></section><Form title={editingWorkerId?'修改并确认人员能力':'新增人员能力'} onSubmit={addWorker}><input placeholder="姓名（以Excel正式姓名为准）" value={workerForm.name} onChange={e=>setWorkerForm({...workerForm,name:e.target.value})}/><div className="row"><input type="number" min="0" placeholder="8小时标准日产能（必填）" value={workerForm.capacity} onChange={e=>setWorkerForm({...workerForm,capacity:e.target.value})}/><input type="number" min="0" placeholder="加班后标准日产能" value={workerForm.overtime} onChange={e=>setWorkerForm({...workerForm,overtime:e.target.value})}/></div><input placeholder="适合加工种类，用逗号分隔" value={workerForm.skills} onChange={e=>setWorkerForm({...workerForm,skills:e.target.value})}/>{editingWorkerId&&<button type="button" className="import" onClick={cancelWorkerEdit}>取消修改</button>}</Form></div>}
-   {tab==='工件定额'&&<div className="split"><section className="panel"><div className="panel-title"><div><small>物料、工时与可加工人员</small><h3>工件能力配置</h3></div><span className="ok">{visibleParts.length}/{data.parts.length} 项</span></div><div className="part-search"><span aria-hidden="true">⌕</span><input type="search" aria-label="搜索工件" placeholder="搜索物料编码、图号、名称或类别" value={partSearch} onChange={e=>setPartSearch(e.target.value)}/>{partSearch&&<button type="button" onClick={()=>setPartSearch('')}>清除</button>}</div><details className="data-details" open><summary>查看工件资料 <span>{visibleParts.length} 项</span></summary><div className="table-wrap capped-table"><table><thead><tr><th>物料 / 图号</th><th>名称</th><th>方式</th><th>工时</th><th>指定人员</th><th>操作</th></tr></thead><tbody>{visibleParts.map(p=><tr key={p.id} className={editingPartCode===p.code?'order-row-selected':''}><td><b className="mono">{p.code}</b><small className="cell-note mono">{p.drawingNo||"未提供图号"}</small></td><td><b>{p.name}</b></td><td><span className={isExternal(p)?'pending':'ok'}>{isExternal(p)?'外协':'车工'}</span></td><td><b>{isExternal(p)?'—':p.unit}</b></td><td className="wrap-cell">{isExternal(p)?'不参与内部排产':p.workers.map(id=>data.workers.find(w=>w.id===id)?.name).filter(Boolean).join('、')||'按加工种类匹配'}</td><td><button type="button" className="import" onClick={()=>editPart(p)}>修改</button></td></tr>)}</tbody></table></div></details></section><Form id="part-edit-form" title={editingPartCode?`修改工件 · ${editingPartCode}`:'新增工件能力'} onSubmit={addPart}><input placeholder="物料编码（相同编码可更新）" value={partForm.code} readOnly={Boolean(editingPartCode)} onChange={e=>setPartForm({...partForm,code:e.target.value})}/><input placeholder="图号（原文件没有时可手动填写）" value={partForm.drawingNo} onChange={e=>setPartForm({...partForm,drawingNo:e.target.value})}/><input placeholder="工件名称" value={partForm.name} onChange={e=>setPartForm({...partForm,name:e.target.value})}/><input placeholder="加工类别" value={partForm.category} onChange={e=>setPartForm({...partForm,category:e.target.value})}/><div className="compact-note">加工工序由系统自动识别。</div><div className="row"><select value={partForm.processMode} onChange={e=>setPartForm({...partForm,processMode:e.target.value as 'internal'|'external'})}><option value="internal">内部加工</option><option value="external">外协加工</option></select><input type="number" step="0.01" min="0" placeholder="单件工时值" disabled={partForm.processMode==='external'} value={partForm.unit} onChange={e=>setPartForm({...partForm,unit:e.target.value})}/></div>{partForm.processMode==='internal'&&<><label>指定可加工人员（不指定则按加工种类匹配）</label><div className="checks">{data.workers.map(w=><label key={w.id}><input type="checkbox" checked={partForm.workers.includes(w.id)} onChange={e=>setPartForm({...partForm,workers:e.target.checked?[...partForm.workers,w.id]:partForm.workers.filter(x=>x!==w.id)})}/>{w.name}</label>)}</div></>}{editingPartCode&&<button type="button" className="import" onClick={cancelPartEdit}>取消修改</button>}</Form></div>}
+   {tab==='人员产能'&&<div className="split personnel-layout"><section className="panel personnel-panel"><div className="panel-title"><div><h3>车工人员与能力</h3><p className="panel-count">共 {data.workers.length} 名人员</p></div>{masterDataActions('workers')}</div>{masterDataImportError('workers')}<div className="table-wrap personnel-table-wrap"><table className="personnel-table"><thead><tr><th>人员</th><th>班组</th><th>日产能</th><th>适合加工</th><th>状态</th><th>操作</th></tr></thead><tbody>{data.workers.map(w=>{const skills=w.skills.join('、')||'根据历史报工整理';return <tr key={w.id}><td><b>{w.name}</b></td><td>{w.team}</td><td><b>{w.capacity||'待确认'}</b><small className="cell-note">加班 {w.overtime||'待确认'}</small></td><td><span className="skills-preview" title={skills}>{skills}</span></td><td><span className={w.active&&w.capacity>0?'ok':'pending'}>{w.active&&w.capacity>0?'已确认':'待确认'}</span></td><td><button type="button" className={w.active&&w.capacity>0?'import':'primary'} onClick={()=>editWorker(w)}>{w.active&&w.capacity>0?'修改':'补充'}</button></td></tr>})}</tbody></table></div></section><Form title={editingWorkerId?'修改并确认人员能力':'新增人员能力'} onSubmit={addWorker}><input placeholder="姓名（以Excel正式姓名为准）" value={workerForm.name} onChange={e=>setWorkerForm({...workerForm,name:e.target.value})}/><div className="row"><input type="number" min="0" placeholder="8小时标准日产能（必填）" value={workerForm.capacity} onChange={e=>setWorkerForm({...workerForm,capacity:e.target.value})}/><input type="number" min="0" placeholder="加班后标准日产能" value={workerForm.overtime} onChange={e=>setWorkerForm({...workerForm,overtime:e.target.value})}/></div><input placeholder="适合加工种类，用逗号分隔" value={workerForm.skills} onChange={e=>setWorkerForm({...workerForm,skills:e.target.value})}/>{editingWorkerId&&<button type="button" className="import" onClick={cancelWorkerEdit}>取消修改</button>}</Form></div>}
+   {tab==='工件定额'&&<div className="split"><section className="panel"><div className="panel-title"><div><h3>工件能力配置</h3><p className="panel-count" role="status">{partSearch.trim()?`找到 ${visibleParts.length} 项，共 ${data.parts.length} 项`:`共 ${data.parts.length} 项工件定额`}</p></div>{masterDataActions('parts')}</div>{masterDataImportError('parts')}<div className="part-search"><span aria-hidden="true">⌕</span><input type="search" aria-label="搜索工件" placeholder="搜索物料编码、图号、名称或类别" value={partSearch} onChange={e=>setPartSearch(e.target.value)}/>{partSearch&&<button type="button" onClick={()=>setPartSearch('')}>清除</button>}</div><details className="data-details" open><summary>查看工件资料</summary><div className="table-wrap capped-table"><table><thead><tr><th>物料 / 图号</th><th>名称</th><th>方式</th><th>工时</th><th>指定人员</th><th>操作</th></tr></thead><tbody>{visibleParts.map(p=><tr key={p.id} className={editingPartCode===p.code?'order-row-selected':''}><td><b className="mono">{p.code}</b><small className="cell-note mono">{p.drawingNo||"未提供图号"}</small></td><td><b>{p.name}</b></td><td><span className={isExternal(p)?'pending':'ok'}>{isExternal(p)?'外协':'车工'}</span></td><td><b>{isExternal(p)?'—':p.unit}</b></td><td className="wrap-cell">{isExternal(p)?'不参与内部排产':p.workers.map(id=>data.workers.find(w=>w.id===id)?.name).filter(Boolean).join('、')||'按加工种类匹配'}</td><td><button type="button" className="import" onClick={()=>editPart(p)}>修改</button></td></tr>)}</tbody></table></div></details></section><Form id="part-edit-form" title={editingPartCode?`修改工件 · ${editingPartCode}`:'新增工件能力'} onSubmit={addPart}><input placeholder="物料编码（相同编码可更新）" value={partForm.code} readOnly={Boolean(editingPartCode)} onChange={e=>setPartForm({...partForm,code:e.target.value})}/><input placeholder="图号（原文件没有时可手动填写）" value={partForm.drawingNo} onChange={e=>setPartForm({...partForm,drawingNo:e.target.value})}/><input placeholder="工件名称" value={partForm.name} onChange={e=>setPartForm({...partForm,name:e.target.value})}/><input placeholder="加工类别" value={partForm.category} onChange={e=>setPartForm({...partForm,category:e.target.value})}/><div className="compact-note">加工工序由系统自动识别。</div><div className="row"><select value={partForm.processMode} onChange={e=>setPartForm({...partForm,processMode:e.target.value as 'internal'|'external'})}><option value="internal">内部加工</option><option value="external">外协加工</option></select><input type="number" step="0.01" min="0" placeholder="单件工时值" disabled={partForm.processMode==='external'} value={partForm.unit} onChange={e=>setPartForm({...partForm,unit:e.target.value})}/></div>{partForm.processMode==='internal'&&<><label>指定可加工人员（不指定则按加工种类匹配）</label><div className="checks">{data.workers.map(w=><label key={w.id}><input type="checkbox" checked={partForm.workers.includes(w.id)} onChange={e=>setPartForm({...partForm,workers:e.target.checked?[...partForm.workers,w.id]:partForm.workers.filter(x=>x!==w.id)})}/>{w.name}</label>)}</div></>}{editingPartCode&&<button type="button" className="import" onClick={cancelPartEdit}>取消修改</button>}</Form></div>}
    {tab==='订单管理'&&<div className="compact-page">
    <section className="panel">
      <div className="panel-title"><div><small>集中管理生产订单</small><h3>订单管理工作台</h3>{data.importedAt&&<small>最近一次周数据更新：{data.importedAt}</small>}</div>{reviewIssues.length?<span className="late">{reviewIssues.length} 项待确认</span>:<span className="ok">数据已就绪</span>}</div>
