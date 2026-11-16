@@ -1,4 +1,4 @@
-import {clockMinutes,workingWindows,workerAvailableWindows,type CalendarEntry} from './production-calendar';
+import {clockMinutes,factoryWorksOn,workingWindows,workerAvailableWindows,type CalendarEntry} from './production-calendar';
 
 export type Machine={id:string;name:string;capacity:number;active:boolean;partCodes:string[];stops:{date:string;start:string;end:string}[]};
 export type MachineSlot={machineId:string;machineName:string;startTime:string;endTime:string;amount:number;capacity:number};
@@ -13,6 +13,27 @@ function subtract(windows:Interval[],blocked:Interval){
  });
 }
 const textTime=(minute:number)=>String(Math.floor(minute/60)).padStart(2,'0')+':'+String(minute%60).padStart(2,'0');
+
+export function machineDailyLoad(machine:Machine,date:string,rows:Occupation[],windows?:string,calendar:Calendar[]=[]){
+ const reservations=rows.filter(row=>row.date===date);
+ const assigned=reservations.filter(row=>row.machineId===machine.id);
+ const unassigned=reservations.filter(row=>!row.machineId&&machine.partCodes.includes(row.partCode)).length;
+ const occupiedWork=assigned.reduce((total,row)=>total+(row.amount||0),0);
+ const stops=machine.stops.filter(stop=>stop.date===date);
+ const factoryStops=calendar.filter(entry=>entry.kind==='downtime'&&!entry.workerIds.length&&date>=entry.start&&date<=entry.end);
+ const downtime=[...stops.map(stop=>`${stop.start}–${stop.end}`),...factoryStops.map(entry=>entry.startTime&&entry.endTime?`${entry.startTime}–${entry.endTime}（全厂）`:'全天停机（全厂）')];
+ const working=factoryWorksOn(date,calendar);
+ const missingTimes=assigned.filter(row=>!row.startTime||!row.endTime).length;
+ const totalMinutes=(intervals:Interval[])=>intervals.reduce((sum,slot)=>sum+slot.end-slot.start,0);
+ const timed=assigned.filter(row=>row.startTime&&row.endTime).map(row=>({start:clockMinutes(row.startTime!),end:clockMinutes(row.endTime!,true)}));
+ const occupiedMinutes=1440-totalMinutes(timed.reduce(subtract,[{start:0,end:1440}]));
+ const free=working&&windows?stops.reduce((slots,stop)=>subtract(slots,{start:clockMinutes(stop.start),end:clockMinutes(stop.end,true)}),workerAvailableWindows('',date,calendar,windows)):[];
+ const freeMinutes=totalMinutes(timed.reduce(subtract,free));
+ const availableMinutes=totalMinutes(free);
+ const shiftMinutes=windows?totalMinutes(workingWindows(windows)):0;
+ const remainingWork=!machine.active||!working||!machine.capacity||unassigned||missingTimes?0:shiftMinutes?freeMinutes*machine.capacity/shiftMinutes:null;
+ return {occupiedWork,occupiedMinutes,remainingWork,downtime,working,unassigned,missingTimes,availableMinutes,availableWork:shiftMinutes?availableMinutes*machine.capacity/shiftMinutes:null};
+}
 
 export function jointMachineSlots(options:{
  machines:Machine[];partCode:string;worker:Person;date:string;calendar?:CalendarEntry[];windows?:string;

@@ -194,6 +194,11 @@ button.ok, button.pending, button.late { min-height: 25px; align-items: center; 
 .miora-load-track span, .miora-load-track b { position: absolute; inset: 0 auto 0 0; }
 .miora-load-track span { background: #d7d0c3; }
 .miora-load-track b { background: var(--accent); opacity: .82; }
+.equipment-load-controls { flex-wrap: wrap; }
+.equipment-load-controls label { display: flex; align-items: center; gap: 8px; }
+.equipment-load-table { min-width: 570px; }
+.equipment-load-table th[scope='row'] { text-align: left; }
+.equipment-load-table details { margin-top: 5px; }
 .miora-guide-list { list-style: none; padding: 0; margin: 0; }
 .miora-guide-list li { display: grid; grid-template-columns: 32px minmax(0,1fr) auto; align-items: start; gap: 12px; border-top: 1px solid var(--rule); padding-block: 12px; }
 .miora-guide-list p { margin: 3px 0; }

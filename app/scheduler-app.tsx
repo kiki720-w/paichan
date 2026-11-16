@@ -3,6 +3,7 @@ import {useEffect,useMemo,useRef,useState,type ReactNode} from 'react';
 import * as XLSX from 'xlsx';
 import {MioraLogin, MioraShell} from './miora-shell';
 import {MioraDashboard, MioraGuide, MioraProductMap} from './miora-workspace';
+import {EquipmentLoadPanel} from './equipment-load-panel';
 import {currentPlanSnapshot, MioraPlan} from './miora-plan';
 import {buildDailyDispatch} from './dispatch-export';
 import {buildOrderTemplate} from './order-template';
@@ -298,7 +299,7 @@ export default function SchedulerApp(){
  const eligibleRows=currentRows.filter(row=>!orderBlocked(row));
  const dispatchRows=data.planStatus==='已发布'?currentRows:eligibleRows;
  const planWindow=productionDays(today(),PLAN_DAYS,data.productionCalendar);
- const planDates=[...new Set([...planWindow,...data.allocations.map(row=>row.date)])].sort();
+ const planDates=[...new Set([...planWindow,...data.allocations.map(row=>row.date),...(resultDay?[resultDay]:[])])].sort();
  const qualityConflicts=useMemo(()=>{
   const candidates=data.orders.filter(order=>order.processTaskId||order.id.startsWith('mes-process-order|'));
   return candidates.filter(order=>{
@@ -735,11 +736,13 @@ export default function SchedulerApp(){
   {notice&&<div className="toast" role="status">{notice}</div>}
   {passwordDialog&&<div role="dialog" aria-modal="true" aria-label="修改密码" className="dialog-backdrop"><form className="password-dialog" onSubmit={changePassword}><div><small>账号安全</small><h3>修改当前账号密码</h3><p>修改后只影响当前登录账号，并需要重新登录。</p></div><label>当前密码<input autoFocus required type="password" autoComplete="current-password" value={passwordForm.currentPassword} onChange={e=>setPasswordForm({...passwordForm,currentPassword:e.target.value})}/></label><label>新密码<input required minLength={8} maxLength={64} type="password" autoComplete="new-password" placeholder="8至64位，建议字母和数字组合" value={passwordForm.newPassword} onChange={e=>setPasswordForm({...passwordForm,newPassword:e.target.value})}/></label><label>再次输入新密码<input required minLength={8} maxLength={64} type="password" autoComplete="new-password" value={passwordForm.confirmPassword} onChange={e=>setPasswordForm({...passwordForm,confirmPassword:e.target.value})}/></label>{passwordError&&<span className="login-error">{passwordError}</span>}<div className="dialog-actions"><button type="button" className="import" onClick={()=>{setPasswordDialog(false);setPasswordForm({currentPassword:'',newPassword:'',confirmPassword:''})}}>取消</button><button type="submit" className="primary">确认修改</button></div></form></div>}
   {inputDialog&&<div role="dialog" aria-modal="true" aria-label={inputDialog.title} className="dialog-backdrop"><form onSubmit={e=>{e.preventDefault();closeAsk(inputDialog.value.trim()||null)}}><h3 style={{margin:0}}>{inputDialog.title}</h3>{inputDialog.options?<select autoFocus required aria-label={inputDialog.title} value={inputDialog.value} onChange={e=>setInputDialog({...inputDialog,value:e.target.value})}><option value="">请选择</option>{inputDialog.options.map(name=><option key={name} value={name}>{name}</option>)}</select>:<input autoFocus required type={inputDialog.type} step={inputDialog.type==='number'?'0.1':undefined} value={inputDialog.value} onChange={e=>setInputDialog({...inputDialog,value:e.target.value})}/>}<div style={{display:'flex',gap:8,justifyContent:'flex-end'}}><button type="button" className="import" onClick={()=>closeAsk(null)}>取消</button><button type="submit" className="primary">确定</button></div></form></div>}
-  {tab==='看板'&&<MioraDashboard factory={activeFactory} summaries={sessionInfo.role==='main'?factorySummaries:undefined}
+  {tab==='看板'&&<><MioraDashboard factory={activeFactory} summaries={sessionInfo.role==='main'?factorySummaries:undefined}
    metrics={{...metrics,workers:data.workers.filter(w=>w.active).length,parts:data.parts.length,lastRun:data.lastRun,allocations:eligibleRows.length,late:new Set(eligibleRows.filter(row=>row.status==='延期').map(row=>row.orderId||row.orderNo)).size}}
    load={planWindow.map(date=>({date,work:eligibleRows.filter(row=>row.date===date).reduce((total,row)=>total+row.amount,0),capacity:data.workers.reduce((total,worker)=>total+capacityOn(worker,date,data.productionCalendar,false,data.workingWindows),0)}))}
    issues={reviewIssues} shortage={{count:eligibleShortfalls.length,work:eligibleShortfalls.reduce((sum,row)=>sum+row.remainingWork,0)}}
-   status={data.planStatus||'草稿'} onNavigate={setTab} onIssues={openOrderReview}/>}
+   status={data.planStatus||'草稿'} onNavigate={setTab} onIssues={openOrderReview}/>
+   <EquipmentLoadPanel key={activeFactory} today={today()} machines={data.machines||[]} rows={data.allocations} shortages={eligibleShortfalls} windows={data.workingWindows} calendar={data.productionCalendar} onPlan={date=>{setResultDay(date);setResultView('day');setTab('排产结果')}}/>
+  </>}
   {tab==='使用引导'&&<MioraGuide steps={guideSteps} onStart={()=>showGuide(0)} onNavigate={setTab}/>}
   {tab==='产品地图'&&<MioraProductMap onNavigate={setTab}/>}
   {tab==='数据导入'&&<div className="compact-page"><section className="cards"><Metric label="待排车工订单" value={data.orders.filter(o=>o.status!=='已完成'&&!isExternal(data.parts.find(p=>p.code===o.partCode),o)).length} note="MES订单"/><Metric label="车工人员" value={data.workers.filter(w=>w.active).length} note="已启用"/><Metric label="工件定额" value={data.parts.filter(p=>!isExternal(p)&&p.unit>0).length} note="已维护"/><Metric label="导入记录" value={(data.importLog||[]).length} note="最近30次"/></section><section className="panel miora-upload" aria-busy={importing}>
