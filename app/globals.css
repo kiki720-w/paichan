@@ -165,9 +165,13 @@ button.ok, button.pending, button.late { min-height: 25px; align-items: center; 
 .dialog-backdrop, .guide-backdrop { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; overflow: auto; padding: 16px; background: #15181c70; }
 .dialog-backdrop > form, .guide-card { width: min(100%, 590px); max-height: calc(100dvh - 32px); overflow: auto; background: var(--paper); border: 1px solid var(--rule); padding: 20px; display: grid; gap: 12px; }
 .dialog-backdrop h3, .guide-card h2 { font: 550 19px/1.35 var(--serif); }
-.excel-import-dialog { position: fixed; inset: 0; margin: auto; width: min(calc(100% - 32px), 750px); max-height: calc(100dvh - 32px); overflow: auto; padding: 20px; background: var(--paper); color: inherit; border: 1px solid var(--rule); }
-.excel-import-dialog::backdrop { background: #15181c70; }
-.excel-import-dialog h3 { font: 550 19px/1.35 var(--serif); }
+.excel-import-dialog, .outsourcing-dialog { position: fixed; inset: 0; margin: auto; width: min(calc(100% - 32px), 750px); max-height: calc(100dvh - 32px); overflow: auto; padding: 20px; background: var(--paper); color: inherit; border: 1px solid var(--rule); }
+.excel-import-dialog::backdrop, .outsourcing-dialog::backdrop { background: #15181c70; }
+.excel-import-dialog h3, .outsourcing-dialog h3 { font: 550 19px/1.35 var(--serif); }
+.outsourcing-dialog { width: min(calc(100% - 32px), 460px); }
+.outsourcing-progress-table { min-width: 670px; }
+.outsourcing-history { margin-top: 6px; }
+.outsourcing-history > div { margin-top: 5px; }
 .dialog-actions, .guide-actions { display: flex; justify-content: end; align-items: center; flex-wrap: wrap; gap: 8px; }
 .guide-progress { display: flex; justify-content: space-between; }
 .guide-dots { display: flex; gap: 6px; }

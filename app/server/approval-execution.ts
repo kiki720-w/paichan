@@ -13,7 +13,7 @@ export function executeApproval(state:AppState,approval:ApprovalRequest,sourceOr
   return {state:{...state,orders:[...state.orders,order]},orderId,orderNo};
  }
  const source=sourceOrderId?matches.find(order=>order.id===sourceOrderId):matches.length===1?matches[0]:undefined;
- if(!source||source.outsourcingParentId||source.status==='已完成'||quantity>source.qty-source.done)throw Error('原内部订单已变化，无法转出批准数量。请核对订单和剩余量。');
+ if(!source||source.outsourcingParentId||source.outsourcingProgress||source.status==='已完成'||quantity>source.qty-source.done)throw Error('原内部订单已变化，无法转出批准数量。请核对订单和剩余量。');
  if(Object.values(state.mesSync?.links||{}).some(link=>link.orderId===source.id))throw Error('该订单已关联 MES，请先确认拆分数量如何与 MES 同步。');
  const isSource=(row:{orderId?:string;orderNo:string;partCode:string})=>
   row.orderId?row.orderId===source.id:row.orderNo===orderNo&&row.partCode===partCode;

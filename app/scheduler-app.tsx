@@ -3,6 +3,8 @@ import {useEffect,useMemo,useRef,useState,type ReactNode} from 'react';
 import * as XLSX from 'xlsx';
 import {MioraLogin, MioraShell} from './miora-shell';
 import {MioraDashboard, MioraGuide, MioraProductMap} from './miora-workspace';
+import {OutsourcingProgressPanel} from './outsourcing-progress-panel';
+import {recordOutsourcing,type OutsourcingAction,type OutsourcingProgress} from './outsourcing-progress';
 import {EquipmentLoadPanel} from './equipment-load-panel';
 import {currentPlanSnapshot, MioraPlan} from './miora-plan';
 import {buildDailyDispatch} from './dispatch-export';
@@ -25,7 +27,7 @@ import {drawingFromRow,orderDataProblems,matchWorkers,rankedOrderCandidates,comp
 
 type Worker={id:string;name:string;team:string;capacity:number;overtime:number;skills:string[];active:boolean};
 type Part={drawingNo?:string,id:string,code:string,name:string,category:string,unit:number,workers:string[],operationCode?:string,processMode?:'internal'|'external'};
-type Order={processTaskId?:string,outsourcingParentId?:string,approvalExecutionId?:string,outsourcedQuantity?:number,workerAssignment?:WorkerAssignment,drawingNo?:string,manualCompletion?:CompletionRecord,id:string,orderNo:string,customer:string,partCode:string,name:string,qty:number,done:number,due:string,priority:number,status:string};
+type Order={outsourcingProgress?:OutsourcingProgress,processTaskId?:string,outsourcingParentId?:string,approvalExecutionId?:string,outsourcedQuantity?:number,workerAssignment?:WorkerAssignment,drawingNo?:string,manualCompletion?:CompletionRecord,id:string,orderNo:string,customer:string,partCode:string,name:string,qty:number,done:number,due:string,priority:number,status:string};
 export type Allocation={machineId?:string,machineName?:string,orderId?:string,drawingNo?:string,date:string,worker:string,orderNo:string,partCode:string,name:string,amount:number,capacity:number,due:string,status:string,reason?:string,candidates?:string[],startTime?:string,endTime?:string};
 type ImportIssue={key:string,orderNo?:string,partCode:string,name:string,reason:string};
 type PlanStatus='草稿'|'已确认'|'已发布'|'已撤回'|'已变更';
@@ -100,7 +102,7 @@ const explainIssue=(reason:string)=>reason.replaceAll('无匹配人员','无人�
 const carOperation=(name:string)=>/车工|粗车|精车|数控车|车削/.test(name);
 const importEntry=(fileName:string,type:string,rows:number,note:string):ImportBatch=>({id:crypto.randomUUID(),fileName,type,rows,note,importedAt:new Date().toLocaleString('zh-CN')});
 const taskKey=(workOrderNo:string,operationNo:string)=>`${clean(workOrderNo)}|${clean(operationNo)}`;
-const isExternal=(part?:Part,order?:Order)=>part?.processMode==='external'||Boolean(order?.outsourcingParentId);
+const isExternal=(part?:Part,order?:Order)=>part?.processMode==='external'||Boolean(order?.outsourcingParentId||order?.outsourcingProgress);
 const PLAN_DAYS=6;
 const priorityLabels=['紧急','交期必保','普通'];
 function withoutCurrentPlan(state:AppState):AppState{
@@ -501,7 +503,15 @@ export default function SchedulerApp(){
    :{...data,history};
   await persist(next,status==='已发布'?(isActive?'计划已发布，可作为现场执行版本':'历史计划已标记发布，当前计划不变'):(isActive?'计划已撤回并保留历史记录':'历史计划已撤回，当前计划不变'),status==='已发布'?'发布计划':'撤回计划');
  }
- async function toggleExternalOrder(order:Order){const status=order.status==='已完成'?'待外协':'已完成',orders=data.orders.map(o=>o.id===order.id?{...o,status,...(o.outsourcingParentId?{done:status==='已完成'?o.qty:0}:{})}:o);await persist({...data,orders},status==='已完成'?`${order.orderNo} 已标记外协完成`:`${order.orderNo} 已恢复为待外协`)}
+ async function saveOutsourcingProgress(orderId:string,action:OutsourcingAction){
+  if(pendingSaves.current||refreshInProgress.current||importing)throw Error('数据正在更新，请稍后重试。');
+  const order=data.orders.find(item=>item.id===orderId);
+  if(!order||!isExternal(data.parts.find(part=>part.code===order.partCode),order))throw Error('外协任务已变化，请刷新后核对。');
+  const title=action.kind==='send'?'登记外协送出':action.kind==='return'?'登记外协回厂':'登记外协验收';
+  const updated=recordOutsourcing(order,action,{id:crypto.randomUUID(),by:sessionInfo?.displayName||'计划员',at:new Date().toISOString()});
+  return persist({...data,orders:data.orders.map(item=>item.id===orderId?updated:item)},order.orderNo+' · '+title+'已保存',title);
+ }
+
  async function confirmOrder(order:Order){
   if(orderIsComplete(order))return;
   const part=data.parts.find(item=>item.code===order.partCode);
@@ -625,7 +635,16 @@ export default function SchedulerApp(){
    const parts=next.parts.map(p=>({...p,drawingNo:(!conflictingDrawings.has(p.code)&&drawingByCode.get(p.code))||p.drawingNo||previousDrawings.get(p.code)}));
    const partDrawings=new Map(parts.map(part=>[part.code,part.drawingNo]));
    const orderDrawings=new Map(data.orders.map(order=>[order.id,order.drawingNo]));
-   const orders=preserveImportedCompletion(data.orders,next.orders.map(o=>({...o,drawingNo:o.drawingNo||(!conflictingDrawings.has(o.partCode)&&drawingByCode.get(o.partCode))||orderDrawings.get(o.id)||partDrawings.get(o.partCode)})));
+   const importedOrders=preserveImportedCompletion(data.orders,next.orders.map(o=>({...o,drawingNo:o.drawingNo||(!conflictingDrawings.has(o.partCode)&&drawingByCode.get(o.partCode))||orderDrawings.get(o.id)||partDrawings.get(o.partCode)})));
+   const tracked=new Map(data.orders.filter(order=>order.outsourcingProgress).map(order=>[order.id,order]));
+   const orders=importedOrders.map(order=>{
+    const previous=tracked.get(order.id);
+    if(!previous)return order;
+    if(order.qty!==previous.qty||order.partCode!==previous.partCode)throw Error(order.orderNo+' 已有外协批次，不能通过导入变更外协数量或物料；本次导入未保存。');
+    tracked.delete(order.id);
+    return {...order,outsourcingProgress:previous.outsourcingProgress,done:previous.done,status:previous.status};
+   });
+   orders.push(...tracked.values());
    const state={...next,parts,orders,issues:collectOrderIssues({...next,orders,parts})};
    const review=reviewExcelImport(data,state);
    const manualCount=orders.filter(o=>o.manualCompletion).length;
@@ -796,7 +815,7 @@ export default function SchedulerApp(){
    </section>
    {newOrderOpen&&<div className="dialog-backdrop" role="dialog" aria-modal="true" aria-label="新增订单"><form onSubmit={addOrder}><h3>新增订单</h3><input placeholder="订单号" value={orderForm.orderNo} onChange={e=>setOrderForm({...orderForm,orderNo:e.target.value})}/><input placeholder="客户" value={orderForm.customer} onChange={e=>setOrderForm({...orderForm,customer:e.target.value})}/><select value={orderForm.partCode} onChange={e=>setOrderForm({...orderForm,partCode:e.target.value})}><option value="">选择工件</option>{data.parts.map(p=><option key={p.id} value={p.code}>{p.code} · {p.name}{p.drawingNo?` · 图号 ${p.drawingNo}`:''}</option>)}</select><div className="row"><input type="number" placeholder="数量" value={orderForm.qty} onChange={e=>setOrderForm({...orderForm,qty:e.target.value})}/><select value={orderForm.priority} onChange={e=>setOrderForm({...orderForm,priority:e.target.value})}><option value="1">紧急</option><option value="2">交期必保</option><option value="3">普通</option></select></div><label>要求完成日期</label><input type="date" value={orderForm.due} onChange={e=>setOrderForm({...orderForm,due:e.target.value})}/>{newOrderError&&<p className="miora-error" role="alert">{newOrderError}</p>}<div className="dialog-actions"><button className="import" type="button" onClick={()=>setNewOrderOpen(false)}>取消</button><button className="primary" type="submit">保存订单</button></div></form></div>}
   </div>}
-  {tab==='外协任务池'&&<section className="panel"><div className="panel-title"><div><small>不占用内部人员产能</small><h3>外协加工任务</h3></div><span className="pending">{data.orders.filter(o=>isExternal(data.parts.find(p=>p.code===o.partCode),o)&&o.status!=='已完成').length} 项待外协</span></div>{data.orders.some(o=>isExternal(data.parts.find(p=>p.code===o.partCode),o))?<div className="table-wrap"><table><thead><tr><th>订单号</th><th>物料编码</th><th>名称</th><th>客户</th><th>数量</th><th>工序编码</th><th>交期</th><th>状态</th><th>操作</th></tr></thead><tbody>{data.orders.filter(o=>isExternal(data.parts.find(p=>p.code===o.partCode),o)).map(o=>{const p=data.parts.find(x=>x.code===o.partCode);return <tr key={o.id}><td className="mono">{o.orderNo}</td><td className="mono">{o.partCode}</td><td><b>{o.name}</b></td><td>{o.customer}</td><td>{Math.max(0,o.qty-o.done)}</td><td className="mono">{p?.operationCode||'待补充'}</td><td>{o.due}</td><td><span className={o.status==='已完成'?'ok':'pending'}>{o.status==='已完成'?'外协完成':'待外协'}</span></td><td><button className={o.status==='已完成'?'pending':'ok'} style={{border:0,cursor:'pointer'}} onClick={()=>toggleExternalOrder(o)}>{o.status==='已完成'?'恢复待办':'确认完成'}</button></td></tr>})}</tbody></table></div>:<div className="empty"><b>暂无外协任务</b><span>在订单的“补充并确认”中选择外协加工，任务会自动转入这里。</span></div>}</section>}
+  {tab==='外协任务池'&&<OutsourcingProgressPanel key={activeFactory} orders={data.orders.filter(order=>isExternal(data.parts.find(part=>part.code===order.partCode),order))} onSave={saveOutsourcingProgress}/>}
   {tab==='排产结果'&&<>
    {!!data.excelImportConflicts?.length&&<details className="panel" open><summary>Excel 导入后待核对的派工（{data.excelImportConflicts.length} 项）</summary><ul>{data.excelImportConflicts.map(issue=><li key={issue.key}>{issue.orderNo} · {issue.partCode}：{issue.reason}</li>)}</ul></details>}
    {equipmentConflicts.length>0&&<p className="import-issues" role="status">有 {equipmentConflicts.length} 条已有派工与设备约束冲突，请人工核对。</p>}

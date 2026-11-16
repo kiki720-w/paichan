@@ -88,7 +88,7 @@ export async function POST(request:Request){
    const row=await env.DB.prepare('SELECT data FROM factory_state WHERE factory=?').bind(factory).first<{data:string}>();
    const state=row?JSON.parse(row.data) as {orders?:FactoryOrder[];parts?:{code:string;processMode?:string}[]}:null;
    const order=state?.orders?.find(item=>item.id===clean(body.orderId));
-   if(!order||order.outsourcingParentId||order.status==='已完成'||quantity>order.qty-order.done||state?.parts?.some(part=>part.code===order.partCode&&part.processMode==='external')){
+   if(!order||order.outsourcingParentId||order.outsourcingProgress||order.status==='已完成'||quantity>order.qty-order.done||state?.parts?.some(part=>part.code===order.partCode&&part.processMode==='external')){
     return problem('请选择本厂未完工的内部订单，申请数量不能超过剩余量。',422);
    }
    orderNo=order.orderNo;
