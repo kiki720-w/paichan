@@ -1,4 +1,4 @@
-import {capacityOn,productionDays} from './production-calendar';
+import {capacityOn,productionDays,clockMinutes,workingWindows} from './production-calendar';
 import {allocationBelongsTo, orderDataProblems, rankedOrderCandidates} from './feedback-rules';
 import type {Allocation, AppState, ScheduleShortage} from './scheduler-app';
 
@@ -8,7 +8,7 @@ export function gapKey(row:ScheduleShortage){
  return row.orderId||JSON.stringify([row.orderNo,row.partCode]);
 }
 
-export function previewBatchGaps(state:Pick<AppState,'orders'|'parts'|'workers'|'allocations'|'scheduleShortages'|'hourTierRules'|'productionCalendar'>,selected:readonly string[],startDate:string){
+export function previewBatchGaps(state:Pick<AppState,'orders'|'parts'|'workers'|'allocations'|'scheduleShortages'|'hourTierRules'|'productionCalendar'|'workingWindows'>,selected:readonly string[],startDate:string){
  const from=new Date(startDate+'T00:00:00Z');
  if(!/^\d{4}-\d{2}-\d{2}$/.test(startDate)||!Number.isFinite(from.getTime())||from.toISOString().slice(0,10)!==startDate)throw Error('请选择有效的补排日期');
  if(!selected.length)throw Error('请选择至少一个产能缺口');
@@ -49,7 +49,7 @@ export function previewBatchGaps(state:Pick<AppState,'orders'|'parts'|'workers'|
    let remaining=needed;
    for(const date of days){
     if(remaining<=epsilon)break;
-    const capacity=capacityOn(worker,date,state.productionCalendar);
+    const capacity=capacityOn(worker,date,state.productionCalendar,false,state.workingWindows);
     const amount=Math.min(remaining,Math.max(0,capacity-(loads.get(slot(worker.name,date))||0)));
     if(amount<=epsilon)continue;
     rows.push({orderId:order.id,orderNo:order.orderNo,partCode:order.partCode,name:order.name,drawingNo:order.drawingNo?.trim()||part.drawingNo?.trim(),date,worker:worker.name,amount,capacity,due:order.due,status:date<=order.due?'按期':'延期',reason:'产能缺口批量补排 · 正常班剩余产能'});
@@ -72,25 +72,8 @@ export function previewBatchGaps(state:Pick<AppState,'orders'|'parts'|'workers'|
 
 type TimedRow={worker:string;date:string;startTime?:string;endTime?:string};
 
-function clockMinutes(value:string,allowEnd=false){
- if(allowEnd&&value==='24:00')return 1440;
- if(!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value))throw Error('时间格式应为 HH:mm');
- const [h,m]=value.split(':').map(Number);return h*60+m;
-}
 function clockText(minutes:number){
  return String(Math.floor(minutes/60)).padStart(2,'0')+':'+String(minutes%60).padStart(2,'0');
-}
-function workingWindows(value:string){
- if(!value.trim())throw Error('请先填写工作时段');
- const windows=value.split(/[,，;；]/).map(window=>{
-  const [a,b,...rest]=window.trim().split(/\s*[-–—]\s*/);
-  if(!a||!b||rest.length)throw Error('工作时段格式：HH:mm-HH:mm');
-  const start=clockMinutes(a),end=clockMinutes(b,true);
-  if(end<=start)throw Error('工作时段结束时间须晚于开始时间');
-  return {start,end};
- }).sort((a,b)=>a.start-b.start);
- if(windows.some((window,i)=>i>0&&window.start<windows[i-1].end))throw Error('工作时段不能重叠');
- return windows;
 }
 export function validateWorkingWindows(rows:readonly TimedRow[],value:string){
  const windows=workingWindows(value);

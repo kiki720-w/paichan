@@ -35,3 +35,41 @@ test('transfer and gap filling use the same factory and personnel exceptions',()
  assert.deepEqual(preview.allocations.map(row=>row.date),expected);
  assert.equal(preview.shortages.length,0);
 });
+
+test('timed downtime and half-day leave subtract only their union within working windows',()=>{
+ const {capacityOn,productionDays,slotBlockedByCalendar}=loadUi('production-calendar');
+ const windows='08:00-11:00,12:00-17:00';
+ const timed=[
+  {kind:'leave',start:day,end:day,half:'first',workerIds:['a']},
+  {kind:'downtime',start:day,end:day,startTime:'10:00',endTime:'14:00',workerIds:[]},
+ ];
+ assert.equal(capacityOn(worker,day,timed,false,windows),3.75);
+ assert.equal(capacityOn(worker,day,timed,true,windows),5.625);
+ assert.equal(capacityOn({...worker,id:'b'},day,timed,false,windows),6.25);
+ assert.equal(productionDays(day,1,timed)[0],day);
+ assert.equal(slotBlockedByCalendar('a',day,timed,windows,'12:30','13:30'),true);
+ assert.equal(slotBlockedByCalendar('a',day,timed,windows,'14:00','15:00'),false);
+ assert.equal(capacityOn(worker,day,[{kind:'downtime',start:day,end:day,startTime:'11:00',endTime:'12:00'}],false,windows),10);
+});
+
+test('transfer and gap filling consume the prorated normal capacity',()=>{
+ const {planOrderTransfer}=loadUi('feedback-rules');
+ const {previewBatchGaps}=loadUi('scheduling-operations');
+ const timed=[{kind:'leave',start:day,end:day,half:'second',workerIds:['a']}];
+ const workingWindows='08:00-12:00,13:00-17:00';
+ const result=planOrderTransfer(order,[order],[],[worker],'a',1,day,timed,workingWindows);
+ assert.equal(result.planned[0].amount,5);
+ const state={orders:[order],parts:[part],workers:[worker],allocations:[],scheduleShortages:[{orderId:'o',remainingWork:30}],productionCalendar:timed,workingWindows};
+ assert.equal(previewBatchGaps(state,['o'],day).allocations[0].amount,5);
+});
+
+test('calendar changes flag existing timed or overloaded dispatch without changing it',()=>{
+ const {calendarDispatchConflicts}=loadUi('production-calendar');
+ const windows='08:00-12:00,13:00-17:00';
+ const timed=[{kind:'downtime',start:day,end:day,startTime:'08:00',endTime:'10:00',workerIds:['a']}];
+ const rows=[{worker:'甲',date:day,amount:1,startTime:'09:00',endTime:'10:00'},{worker:'甲',date:day,amount:1,startTime:'10:00',endTime:'11:00'}];
+ assert.deepEqual(calendarDispatchConflicts(rows,[worker],timed,windows,day),[rows[0]]);
+ const untimed=[{worker:'甲',date:day,amount:12}];
+ assert.deepEqual(calendarDispatchConflicts(untimed,[worker],timed,windows,day),untimed);
+ assert.equal(rows[0].startTime,'09:00');
+});
