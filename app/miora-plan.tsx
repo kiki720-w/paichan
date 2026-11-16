@@ -3,7 +3,7 @@ import type {ReactNode} from 'react';
 type Dispatch = {
   date: string; worker: string; orderNo: string; partCode: string; name: string;
   amount: number; capacity: number; due: string; status: string; drawingNo?: string;
-  reason?: string; candidates?: string[]; startTime?:string; endTime?:string;
+  machineName?:string; reason?: string; candidates?: string[]; startTime?:string; endTime?:string;
 };
 type Shortage = {
   orderId?: string; orderNo: string; partCode: string; name: string; due: string;
@@ -44,6 +44,7 @@ function PlanTask<T extends Dispatch>({row, onEdit, onAssign, onComplete, onSlot
       <strong className="mono">{row.orderNo}</strong>
       <span>{row.name}</span>
       <span className="mono">{row.amount.toFixed(1)} · {row.status}</span>
+      {row.machineName&&<small>{row.machineName}</small>}
       {row.startTime&&row.endTime&&<span className="mono">{row.startTime}–{row.endTime}</span>}
     </summary>
     <div className="miora-task-detail">

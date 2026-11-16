@@ -157,3 +157,13 @@ export function validateCalendarEntry(entry:CalendarEntry,entries:readonly Calen
   throw Error('同一天不能同时设为节假日和调休上班，请先修改已有记录。');
  }
 }
+
+export function workerAvailableWindows(id:string,date:string,calendar:Calendar=[],windowsText?:string){
+ if(!windowsText||workerBlockedOn(id,date,calendar))return [];
+ const windows=workingWindows(windowsText);
+ const blocked=unavailable(windows,partialRules(id,date,calendar));
+ return blocked.reduce((free,interval)=>free.flatMap(slot=>{
+  if(interval.end<=slot.start||interval.start>=slot.end)return [slot];
+  return [{start:slot.start,end:interval.start},{start:interval.end,end:slot.end}].filter(piece=>piece.end>piece.start);
+ }),windows);
+}

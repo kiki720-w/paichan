@@ -1,3 +1,4 @@
+import {jointMachineSlots,type Machine,type MachineSlot} from './equipment-capacity';
 import {capacityOn,type CalendarEntry} from './production-calendar';
 // Customer feedback rules for drawing lookup, completion and order assignment.
 export type CompletionRecord={done:number;at:string;by:string;reason:string};
@@ -101,7 +102,7 @@ export function assignOrderWorker<J extends Job,A extends {orderId?:string;order
  return {order:{...order,workerAssignment:{workerId,reason:reason.trim(),by,at}},allocations};
 }
 // Rebuild only this order's unfinished work; all other allocations stay untouched.
-export function planOrderTransfer<A extends {orderId?:string;orderNo:string;partCode:string;date:string;worker:string;amount:number;capacity:number;name:string;due:string;status:string}>(order:Job,orders:Job[],rows:A[],workers:(SkillWorker&{name:string;capacity:number})[],workerId:string,unit:number,startDate:string,calendar?:CalendarEntry[],windows?:string){
+export function planOrderTransfer<A extends {orderId?:string;orderNo:string;partCode:string;date:string;worker:string;amount:number;capacity:number;name:string;due:string;status:string;machineId?:string;startTime?:string;endTime?:string}>(order:Job,orders:Job[],rows:A[],workers:(SkillWorker&{name:string;capacity:number})[],workerId:string,unit:number,startDate:string,calendar?:CalendarEntry[],windows?:string,machines?:Machine[]){
  const worker=workers.find(w=>w.id===workerId&&w.active);
  if(!worker||!Number.isFinite(worker.capacity)||worker.capacity<=0)throw new Error('所选员工缺少有效的正常日产能，请先确认人员能力');
  if(!Number.isFinite(unit)||unit<=0)throw new Error('缺少有效单件定额，无法顺延，请先补齐工件资料');
@@ -116,16 +117,22 @@ export function planOrderTransfer<A extends {orderId?:string;orderNo:string;part
   if(!Number.isFinite(row.amount)||row.amount<0)throw new Error('目标员工已有工作量无效，请先核对派工');
   loads.set(row.date,(loads.get(row.date)||0)+row.amount);
  }
- const planned:{orderId:string;orderNo:string;partCode:string;name:string;drawingNo?:string;date:string;worker:string;amount:number;capacity:number;due:string;status:string;reason:string;candidates:string[]}[]=[];
+ const equipment=machines?.filter(machine=>machine.partCodes.includes(order.partCode))||[];
+ if(equipment.length&&(!windows||!equipment.some(machine=>machine.active)))throw Error('请先设置工作时段，并启用适用设备');
+ const planned:({orderId:string;orderNo:string;partCode:string;name:string;drawingNo?:string;date:string;worker:string;amount:number;capacity:number;due:string;status:string;reason:string;candidates:string[]}&Partial<MachineSlot>)[]=[];
  let remaining=required;
  const date=new Date(startDate+'T00:00:00Z');
  for(let days=0;remaining>0&&days<3660;days++,date.setUTCDate(date.getUTCDate()+1)){
   const day=date.toISOString().slice(0,10),capacity=capacityOn(worker,day,calendar,false,windows);
   const available=Math.max(0,capacity-(loads.get(day)||0));
   if(available<=0)continue;
-  const amount=Math.min(remaining,available);
-  planned.push({orderId:order.id,orderNo:order.orderNo,partCode:order.partCode,name:order.name,drawingNo:order.drawingNo,date:day,worker:worker.name,amount,capacity,due:order.due,status:day<=order.due?'按期':'延期',reason:'订单人工指定；按正常班剩余产能顺延',candidates:[worker.name]});
-  remaining=amount===remaining?0:remaining-amount;
+  if(!equipment.length&&others.some(row=>row.machineId&&row.worker===worker.name&&row.date===day))continue;
+  const slots=equipment.length?jointMachineSlots({machines:equipment,partCode:order.partCode,worker,date:day,calendar,windows,rows:others,remaining,workerRemaining:available}):[{amount:Math.min(remaining,available),capacity}];
+  for(const slot of slots){
+   const {amount}=slot;
+  planned.push({...slot,orderId:order.id,orderNo:order.orderNo,partCode:order.partCode,name:order.name,drawingNo:order.drawingNo,date:day,worker:worker.name,amount,capacity:slot.capacity,due:order.due,status:day<=order.due?'按期':'延期',reason:'订单人工指定；按正常班剩余产能顺延',candidates:[worker.name]});
+   remaining=amount===remaining?0:remaining-amount;
+  }
  }
  if(remaining>0)throw new Error('十年内无法安排完剩余工作量，请核对定额及人员能力；未保存任何调整');
  return {allocations:[...others,...planned].sort((a,b)=>a.date.localeCompare(b.date)||a.worker.localeCompare(b.worker)),planned,required,finish:planned.at(-1)!.date,late:planned.at(-1)!.date>order.due};

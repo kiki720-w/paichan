@@ -1,3 +1,4 @@
+import {jointMachineSlots} from './equipment-capacity';
 import {releasedOrder} from './process-quality';
 import {capacityOn,productionDays,clockMinutes,workingWindows} from './production-calendar';
 import {allocationBelongsTo, orderDataProblems, rankedOrderCandidates} from './feedback-rules';
@@ -9,7 +10,7 @@ export function gapKey(row:ScheduleShortage){
  return row.orderId||JSON.stringify([row.orderNo,row.partCode]);
 }
 
-export function previewBatchGaps(state:Pick<AppState,'orders'|'parts'|'workers'|'allocations'|'scheduleShortages'|'hourTierRules'|'productionCalendar'|'workingWindows'|'processTasks'>,selected:readonly string[],startDate:string){
+export function previewBatchGaps(state:Pick<AppState,'orders'|'parts'|'workers'|'allocations'|'scheduleShortages'|'hourTierRules'|'productionCalendar'|'workingWindows'|'processTasks'|'machines'>,selected:readonly string[],startDate:string){
  const from=new Date(startDate+'T00:00:00Z');
  if(!/^\d{4}-\d{2}-\d{2}$/.test(startDate)||!Number.isFinite(from.getTime())||from.toISOString().slice(0,10)!==startDate)throw Error('请选择有效的补排日期');
  if(!selected.length)throw Error('请选择至少一个产能缺口');
@@ -42,6 +43,7 @@ export function previewBatchGaps(state:Pick<AppState,'orders'|'parts'|'workers'|
   const required=Math.max(0,order.qty-order.done)*part.unit;
   const scheduled=allocations.filter(row=>allocationBelongsTo(row,order,state.orders)).reduce((total,row)=>total+row.amount,0);
   const needed=Math.max(0,required-scheduled);
+  const equipment=state.machines?.filter(machine=>machine.partCodes.includes(part.code))||[];
   const ranked=rankedOrderCandidates(order,part,state.workers,state.hourTierRules);
   let best:{rows:Allocation[];remaining:number;preferred:boolean}|undefined;
   for(const worker of ranked.workers){
@@ -51,10 +53,16 @@ export function previewBatchGaps(state:Pick<AppState,'orders'|'parts'|'workers'|
    for(const date of days){
     if(remaining<=epsilon)break;
     const capacity=capacityOn(worker,date,state.productionCalendar,false,state.workingWindows);
-    const amount=Math.min(remaining,Math.max(0,capacity-(loads.get(slot(worker.name,date))||0)));
+    const workerRemaining=Math.max(0,capacity-(loads.get(slot(worker.name,date))||0));
+    if(!equipment.length&&allocations.some(row=>row.machineId&&row.worker===worker.name&&row.date===date))continue;
+    const available=equipment.length?jointMachineSlots({machines:equipment,partCode:part.code,worker,date,calendar:state.productionCalendar,
+     windows:state.workingWindows,rows:allocations,remaining,workerRemaining}):[{amount:Math.min(remaining,workerRemaining),capacity}];
+    for(const equipmentSlot of available){
+     const {amount}=equipmentSlot;
     if(amount<=epsilon)continue;
-    rows.push({orderId:order.id,orderNo:order.orderNo,partCode:order.partCode,name:order.name,drawingNo:order.drawingNo?.trim()||part.drawingNo?.trim(),date,worker:worker.name,amount,capacity,due:order.due,status:date<=order.due?'按期':'延期',reason:'产能缺口批量补排 · 正常班剩余产能'});
+    rows.push({...equipmentSlot,orderId:order.id,orderNo:order.orderNo,partCode:order.partCode,name:order.name,drawingNo:order.drawingNo?.trim()||part.drawingNo?.trim(),date,worker:worker.name,amount,capacity:equipmentSlot.capacity,due:order.due,status:date<=order.due?'按期':'延期',reason:'产能缺口批量补排 · 正常班剩余产能'});
     remaining-=amount;
+    }
    }
    const preferred=ranked.preferredIds.has(worker.id);
    if(!best||remaining<best.remaining-epsilon||(Math.abs(remaining-best.remaining)<=epsilon&&preferred&&!best.preferred))best={rows,remaining,preferred};

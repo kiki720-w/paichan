@@ -10,7 +10,7 @@ import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 const code=readFileSync(new URL('../app/feedback-rules.ts',import.meta.url),'utf8');
 const rulesModule={exports:{}};
-vm.runInNewContext(ts.transpileModule(code,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:rulesModule.exports,require:()=>calendarModule,module:rulesModule});
+vm.runInNewContext(ts.transpileModule(code,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:rulesModule.exports,require:name=>name==='./equipment-capacity'?loadUi('equipment-capacity'):calendarModule,module:rulesModule});
 const {drawingFromRow,matchWorkers,matchingHourTierRule,rankedOrderCandidates,orderCandidates,recordCompletion,preserveImportedCompletion,remainingAllocations,completionStatus}=rulesModule.exports;
 const plain=x=>JSON.parse(JSON.stringify(x));
 const workers=[{id:'normal',active:true,skills:['顶尖','本体','拉杆']},{id:'special',active:true,skills:['格里森拉杆','珩齿拉杆']},{id:'off',active:false,skills:['顶尖']}];
@@ -39,7 +39,7 @@ test('decreasing completed total does not invent allocations or alter other jobs
 
 const appSource=readFileSync(new URL('../app/scheduler-app.tsx',import.meta.url),'utf8');
 const engineSource=appSource.slice(appSource.indexOf('function schedule('),appSource.indexOf('export default function SchedulerApp'));
-const engineContext={...calendarModule,releasedOrder,orderDataProblems:rulesModule.exports.orderDataProblems,matchWorkers,rankedOrderCandidates,matchingWorkers:matchWorkers,isExternal:p=>p?.processMode==='external',PLAN_DAYS:6,today:()=> '2026-08-27',addDay:s=>{const d=new Date(s+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)},workday:s=>{let d=new Date(s+'T00:00:00Z');while(d.getUTCDay()===0)d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)}};
+const engineContext={jointMachineSlots:loadUi('equipment-capacity').jointMachineSlots,...calendarModule,releasedOrder,orderDataProblems:rulesModule.exports.orderDataProblems,matchWorkers,rankedOrderCandidates,matchingWorkers:matchWorkers,isExternal:p=>p?.processMode==='external',PLAN_DAYS:6,today:()=> '2026-08-27',addDay:s=>{const d=new Date(s+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)},workday:s=>{let d=new Date(s+'T00:00:00Z');while(d.getUTCDay()===0)d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)}};
 vm.createContext(engineContext);vm.runInContext(ts.transpileModule(engineSource,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,engineContext);
 test('scheduler honors preferred staff and falls back only when they cannot cover the plan',()=>{const rule={id:'r',category:'底座',operator:'lte',threshold:35,workerIds:['preferred'],mode:'preferred'},job={...order,name:'底座',partCode:'BASE'},partRow={...part('底座'),code:'BASE',unit:10},fallback={id:'fallback',name:'候补',active:true,skills:['底座'],capacity:100,overtime:100},preferred={id:'preferred',name:'首选',active:true,skills:[],capacity:100,overtime:100};let result=engineContext.schedule({workers:[preferred,fallback],parts:[partRow],orders:[job],hourTierRules:[rule]},false);assert.ok(result.allocations.every(a=>a.worker==='首选'));result=engineContext.schedule({workers:[{...preferred,capacity:0},fallback],parts:[partRow],orders:[job],hourTierRules:[rule]},false);assert.ok(result.allocations.every(a=>a.worker==='候补'));result=engineContext.schedule({workers:[{...preferred,capacity:10},fallback],parts:[partRow],orders:[job],hourTierRules:[{...rule,mode:'exclusive'}]},false);assert.ok(result.allocations.every(a=>a.worker==='首选'));assert.ok(result.shortages.length)});
 test('actual scheduler preserves six workdays, explicit assignment, quantity and drawing',()=>{const state={workers:[{...workers[0],capacity:50,overtime:60,name:'测试员'}],parts:[{...part('顶尖',['normal']),code:'P1',unit:10,drawingNo:'D-01'}],orders:[{...order,drawingNo:'ORDER-D'}]};const result=engineContext.schedule(state,false);assert.equal(result.allocations.length,2);assert.equal(result.allocations.reduce((n,a)=>n+a.amount,0),100);assert.ok(result.allocations.every(a=>a.worker==='测试员'&&a.drawingNo==='ORDER-D'&&a.orderId==='o1'));assert.equal(result.shortages.length,0);});
@@ -118,4 +118,20 @@ test('automatic scheduling uses calendar days and estimates remaining work after
  assert.equal(result.allocations.map(row=>row.date).join(','),'2026-08-28,2026-08-30,2026-09-01,2026-09-02');
  assert.equal(result.shortages[0].remainingWork,60);
  assert.equal(result.shortages[0].estimatedFinish,'2026-09-11');
+});
+
+test('machine dispatch shares one machine across workers without occupying downtime or exceeding capacity',()=>{
+ const workerA={...workers[0],id:'normal',name:'甲',capacity:80,overtime:80};
+ const workerB={...workerA,id:'second',name:'乙'};
+ const partRow={...part('顶尖',['normal','second']),code:'P1',unit:1,drawingNo:'D-1'};
+ const orders=[{...order,qty:20,drawingNo:'D-1',workerAssignment:{workerId:'normal'}},
+  {...order,id:'o2',orderNo:'WO-2',qty:60,drawingNo:'D-1',workerAssignment:{workerId:'second'}}];
+ const machines=[{id:'m1',name:'一号机',active:true,capacity:40,partCodes:['P1'],stops:[{date:'2026-08-27',start:'09:00',end:'11:00'}]}];
+ const result=engineContext.schedule({workers:[workerA,workerB],parts:[partRow],orders,machines,workingWindows:'08:00-12:00,13:00-17:00'});
+ const rows=result.allocations.filter(row=>row.date==='2026-08-27').sort((a,b)=>a.startTime.localeCompare(b.startTime));
+ assert.equal(rows.reduce((sum,row)=>sum+row.amount,0),30);
+ assert.equal(new Set(rows.map(row=>row.worker)).size,2);
+ assert.ok(rows.every(row=>row.machineId==='m1'&&(row.endTime<='09:00'||row.startTime>='11:00')));
+ assert.ok(rows.every((row,index)=>!index||rows[index-1].endTime<=row.startTime));
+ assert.equal(result.allocations.reduce((sum,row)=>sum+row.amount,0),80);
 });
