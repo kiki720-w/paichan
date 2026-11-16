@@ -6,6 +6,8 @@ import {MioraDashboard, MioraGuide, MioraProductMap} from './miora-workspace';
 import {OutsourcingProgressPanel} from './outsourcing-progress-panel';
 import {recordOutsourcing,type OutsourcingAction,type OutsourcingProgress} from './outsourcing-progress';
 import {EquipmentLoadPanel} from './equipment-load-panel';
+import {MillingPilotPanel} from './milling-pilot-panel';
+import {generateMillingPlan,isMillingTask,type MillingPlan,type MillingRule} from './milling-pilot';
 import {currentPlanSnapshot, MioraPlan} from './miora-plan';
 import {buildDailyDispatch} from './dispatch-export';
 import {buildOrderTemplate} from './order-template';
@@ -36,7 +38,7 @@ type ScheduleHistory={id:string;createdAt:string;label:string;allocations:Alloca
 type AuditEntry={id:string;actor:string;action:string;summary:string;createdAt:string;revision:number};
 type SkillEvidence={person:string,partCode:string,operation:string,count:number,lastAt:string,avgUnitTime:number};
 type ImportBatch={id:string,fileName:string,type:string,importedAt:string,rows:number,note:string};
-export type AppState={workers:Worker[],parts:Part[],orders:Order[],allocations:Allocation[],lastRun:string,issues?:ImportIssue[],importedAt?:string,history?:ScheduleHistory[],processTasks?:ProcessTask[],skillEvidence?:SkillEvidence[],importLog?:ImportBatch[],scheduleShortages?:ScheduleShortage[],hourTierRules?:HourTierRule[],planStatus?:PlanStatus,planSnapshotId?:string,planUpdatedAt?:string,planUpdatedBy?:string,planChangeNote?:string,workingWindows?:string,productionCalendar?:CalendarEntry[],machines?:Machine[],excelImportConflicts?:ExcelImportConflict[],mesSync?:MesSyncState['mesSync']};
+export type AppState={workers:Worker[],parts:Part[],orders:Order[],allocations:Allocation[],lastRun:string,issues?:ImportIssue[],importedAt?:string,history?:ScheduleHistory[],processTasks?:ProcessTask[],skillEvidence?:SkillEvidence[],importLog?:ImportBatch[],scheduleShortages?:ScheduleShortage[],hourTierRules?:HourTierRule[],planStatus?:PlanStatus,planSnapshotId?:string,planUpdatedAt?:string,planUpdatedBy?:string,planChangeNote?:string,workingWindows?:string,productionCalendar?:CalendarEntry[],machines?:Machine[],millingRules?:MillingRule[],millingPlan?:MillingPlan,excelImportConflicts?:ExcelImportConflict[],mesSync?:MesSyncState['mesSync']};
 type Factory='xian'|'xingping';
 type SessionInfo={role:'main'|'factory';factory?:Factory;displayName:string};
 type FactorySummary={orders:number;workers:number;parts:number;allocations:number;lastRun:string};
@@ -397,6 +399,20 @@ export default function SchedulerApp(){
   }catch(error){setCompletionError(error instanceof Error?error.message:'完工登记失败')}finally{setCompletionSaving(false)}
  }
  async function run(){const result=schedule(data,true),at=new Date().toLocaleString('zh-CN');if(await persist({...withoutCurrentPlan(data),...(data.mesSync?{mesSync:{...data.mesSync,planNeedsReview:false}}:{}),allocations:result.allocations,scheduleShortages:result.shortages,issues:result.blocked,lastRun:at,planStatus:'草稿',planUpdatedAt:at,planUpdatedBy:sessionInfo?.displayName},`六工作日滚动排产完成：生成 ${result.allocations.length} 条派工记录，${result.shortages.length} 项存在未排缺口，${result.blocked.length} 项资料待确认`,'生成排产'))setTab('排产结果')}
+ async function saveMillingRule(rule:MillingRule){
+  if(pendingSaves.current||refreshInProgress.current)return false;
+  if(!data.processTasks?.some(task=>isMillingTask(task)&&task.partCode===rule.partCode)||
+    !data.workers.some(worker=>worker.id===rule.workerId&&worker.active&&worker.capacity>0)||
+    !data.machines?.some(machine=>machine.id===rule.machineId&&machine.active&&machine.capacity>0)||
+    !Number.isFinite(rule.unit)||rule.unit<0.001)throw Error('请确认物料、可用人员、可用设备和单件定额。');
+  const millingRules=[...(data.millingRules||[]).filter(item=>item.partCode!==rule.partCode),rule];
+  return persist({...data,millingRules},'铣工规则已保存','维护铣工试排规则');
+ }
+ async function runMillingPilot(){
+  if(pendingSaves.current||refreshInProgress.current)return false;
+  const millingPlan=generateMillingPlan(data,today(),stateRevision+1);
+  return persist({...data,millingPlan},`已保存 ${millingPlan.rows.length} 条铣工试排安排`,'生成铣工试排');
+ }
  async function refreshData(){
   if(pendingSaves.current||importing||refreshInProgress.current||loading)return;
   refreshInProgress.current=true;
@@ -775,8 +791,10 @@ export default function SchedulerApp(){
     {data.importLog?.[0]&&<p className="compact-note">{data.importLog[0].fileName} · {data.importLog[0].note}</p>}
     {reviewIssues.length>0&&<button type="button" className="import" onClick={openOrderReview}>查看 {reviewIssues.length} 项待确认资料</button>}
     {data.importLog?.length?<details className="data-details"><summary>导入记录 <span>{data.importLog.length} 次</span></summary><div className="table-wrap capped-table"><table><thead><tr><th>文件</th><th>内容</th><th>处理结果</th></tr></thead><tbody>{data.importLog.slice(0,20).map(x=><tr key={x.id}><td><b>{x.fileName}</b><small className="cell-note">{x.importedAt}</small></td><td><span className="ok">{x.type}</span><small className="cell-note">{x.rows} 行</small></td><td className="wrap-cell">{x.note}</td></tr>)}</tbody></table></div></details>:<div className="empty compact-empty"><b>尚未导入数据</b><span>选择MES导出的Excel即可开始。</span></div>}</section>{data.skillEvidence?.length?<details className="panel compact-section"><summary className="compact-summary"><span><b>历史人员与产品记录</b><small>仅用于辅助匹配</small></span><em>{data.skillEvidence.length} 条</em></summary><div className="table-wrap capped-table"><table><thead><tr><th>人员</th><th>物料编码</th><th>工序</th><th>次数</th><th>最近记录</th><th>平均工时</th></tr></thead><tbody>{data.skillEvidence.filter(e=>carOperation(e.operation)||e.operation==='历史绩效').slice(0,100).map((e,i)=><tr key={`${e.person}-${e.partCode}-${i}`}><td><b>{e.person}</b></td><td className="mono">{e.partCode}</td><td>{e.operation}</td><td>{e.count}</td><td>{e.lastAt}</td><td>{e.avgUnitTime?e.avgUnitTime.toFixed(2):'—'}</td></tr>)}</tbody></table></div></details>:null}</div>}
-  {tab==='工序任务'&&<ProcessQuality key={activeFactory} tasks={data.processTasks||[]} actor={sessionInfo.displayName}
-   onSave={(processTasks,summary)=>persist({...data,processTasks},summary,'维护质检与工序放行')}/>}
+  {tab==='工序任务'&&<><ProcessQuality key={activeFactory} tasks={data.processTasks||[]} actor={sessionInfo.displayName}
+   onSave={(processTasks,summary)=>persist({...data,processTasks},summary,'维护质检与工序放行')}/>
+   <MillingPilotPanel key={'milling-'+activeFactory} state={data} revision={stateRevision} today={today()} onRule={saveMillingRule} onGenerate={runMillingPilot}/>
+  </>}
   {tab==='预警中心'&&<section className="panel"><div className="panel-title"><div><small>异常驱动排产</small><h3>工序预警与待确认事项</h3></div><span className={processWarnings.some(w=>w.level==='红色')?'late':'pending'}>{processWarnings.length} 项</span></div>{processWarnings.length?<div className="table-wrap"><table><thead><tr><th>级别</th><th>类型</th><th>工单</th><th>物料/工序</th><th>原因</th><th>要求完成</th></tr></thead><tbody>{processWarnings.slice(0,1000).map(w=><tr key={w.key}><td><span className={w.level==='红色'?'late':w.level==='黄色'?'pending':'ok'}>{w.level}</span></td><td>{w.type}</td><td className="mono">{w.task.workOrderNo}</td><td>{w.task.partCode} · {w.task.operationName}</td><td>{w.reason}</td><td>{w.task.due||'待补充'}</td></tr>)}</tbody></table></div>:<div className="empty"><b>当前没有工序预警</b><span>导入生产进度和报工记录后自动检查。</span></div>}</section>}
   {tab==='生产审批'&&<ProductionApprovals key={activeFactory} factory={activeFactory} role={sessionInfo.role} initialKind={approvalKind} onExecuted={()=>loadFactory(activeFactory)} orders={data.orders.filter(order=>order.done<order.qty&&order.status!=='已完成'&&!isExternal(data.parts.find(part=>part.code===order.partCode),order)).map(order=>({id:order.id,orderNo:order.orderNo,partCode:order.partCode,remaining:order.qty-order.done,due:order.due}))}/>}
   {tab==='业务规则'&&<div style={{display:'grid',gap:16}}>

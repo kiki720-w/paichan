@@ -37,7 +37,7 @@ export function machineDailyLoad(machine:Machine,date:string,rows:Occupation[],w
 
 export function jointMachineSlots(options:{
  machines:Machine[];partCode:string;worker:Person;date:string;calendar?:CalendarEntry[];windows?:string;
- overtime?:boolean;rows:Occupation[];remaining:number;workerRemaining:number;
+ overtime?:boolean;rows:Occupation[];remaining:number;workerRemaining:number;unit?:number;
 }):MachineSlot[]{
  const {machines,partCode,worker,date,calendar,windows,overtime,rows}=options;
  if(!windows||!worker.active)return [];
@@ -67,7 +67,8 @@ export function jointMachineSlots(options:{
    if(available<=.001)break;
    const start=Math.ceil(slot.start),end=Math.floor(slot.end);
    if(end<=start)continue;
-   const amount=Math.min(available,(end-start)*rate);
+   const work=Math.min(available,(end-start)*rate);
+   const amount=options.unit?Math.floor(work/options.unit+1e-8)*options.unit:work;
    if(amount<=.001)continue;
    const duration=Math.min(end-start,Math.ceil(amount/rate-1e-9));
    result.push({machineId:machine.id,machineName:machine.name,startTime:textTime(start),endTime:textTime(start+duration),amount,capacity:nominal});
