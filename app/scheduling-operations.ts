@@ -1,3 +1,4 @@
+import {capacityOn,productionDays} from './production-calendar';
 import {allocationBelongsTo, orderDataProblems, rankedOrderCandidates} from './feedback-rules';
 import type {Allocation, AppState, ScheduleShortage} from './scheduler-app';
 
@@ -7,12 +8,11 @@ export function gapKey(row:ScheduleShortage){
  return row.orderId||JSON.stringify([row.orderNo,row.partCode]);
 }
 
-export function previewBatchGaps(state:Pick<AppState,'orders'|'parts'|'workers'|'allocations'|'scheduleShortages'|'hourTierRules'>,selected:readonly string[],startDate:string){
+export function previewBatchGaps(state:Pick<AppState,'orders'|'parts'|'workers'|'allocations'|'scheduleShortages'|'hourTierRules'|'productionCalendar'>,selected:readonly string[],startDate:string){
  const from=new Date(startDate+'T00:00:00Z');
  if(!/^\d{4}-\d{2}-\d{2}$/.test(startDate)||!Number.isFinite(from.getTime())||from.toISOString().slice(0,10)!==startDate)throw Error('请选择有效的补排日期');
  if(!selected.length)throw Error('请选择至少一个产能缺口');
- const days:string[]=[];
- for(const d=new Date(from);days.length<6;d.setUTCDate(d.getUTCDate()+1))if(d.getUTCDay()!==0)days.push(d.toISOString().slice(0,10));
+ const days=productionDays(startDate,6,state.productionCalendar);
  const keys=new Set(selected),gaps=state.scheduleShortages||[];
  const chosen=gaps.filter(gap=>keys.has(gapKey(gap)));
  if(chosen.length!==keys.size)throw Error('缺口记录已变化，请重新选择');
@@ -49,9 +49,10 @@ export function previewBatchGaps(state:Pick<AppState,'orders'|'parts'|'workers'|
    let remaining=needed;
    for(const date of days){
     if(remaining<=epsilon)break;
-    const amount=Math.min(remaining,Math.max(0,worker.capacity-(loads.get(slot(worker.name,date))||0)));
+    const capacity=capacityOn(worker,date,state.productionCalendar);
+    const amount=Math.min(remaining,Math.max(0,capacity-(loads.get(slot(worker.name,date))||0)));
     if(amount<=epsilon)continue;
-    rows.push({orderId:order.id,orderNo:order.orderNo,partCode:order.partCode,name:order.name,drawingNo:order.drawingNo?.trim()||part.drawingNo?.trim(),date,worker:worker.name,amount,capacity:worker.capacity,due:order.due,status:date<=order.due?'按期':'延期',reason:'产能缺口批量补排 · 正常班剩余产能'});
+    rows.push({orderId:order.id,orderNo:order.orderNo,partCode:order.partCode,name:order.name,drawingNo:order.drawingNo?.trim()||part.drawingNo?.trim(),date,worker:worker.name,amount,capacity,due:order.due,status:date<=order.due?'按期':'延期',reason:'产能缺口批量补排 · 正常班剩余产能'});
     remaining-=amount;
    }
    const preferred=ranked.preferredIds.has(worker.id);

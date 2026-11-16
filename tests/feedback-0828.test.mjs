@@ -1,10 +1,12 @@
+import {loadUi} from './load-ui.mjs';
+const calendarModule=loadUi('production-calendar');
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {readFileSync} from 'node:fs';
 import ts from 'typescript';
 import vm from 'node:vm';
 const rulesModule={exports:{}};
-vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../app/feedback-rules.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:rulesModule.exports,module:rulesModule,Error});
+vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../app/feedback-rules.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:rulesModule.exports,require:()=>calendarModule,module:rulesModule,Error});
 const {matchesOrderSearch,orderCandidates,assignOrderWorker,preserveImportedCompletion}=rulesModule.exports;
 const workers=[{id:'a',name:'A',active:true,skills:['拉杆'],capacity:100,overtime:120},{id:'b',name:'B',active:true,skills:['专线拉杆'],capacity:100,overtime:120}];
 const order={id:'o1',orderNo:'WO1',partCode:'P1',name:'拉杆',drawingNo:'001-Ab',due:'2026-09-10',qty:10,done:0,status:'待排'};
@@ -57,11 +59,11 @@ test('failed save or over-capacity transfer stays open and never silently falls 
 test('single-row edit resolves displayed copy to stored row and saves correct employee',async()=>{
  const state={workers,parts:[part],orders:[order],allocations:rows,scheduleShortages:[]};const displayed=rows.map(r=>({...r,drawingNo:'001-Ab'}));let saved;
  const answers=['图纸已核对','负责人','2026-09-01','B','40'];
- const ui={currentRows:displayed,data:state,today:()=> '2026-08-28',window:{confirm:()=>true},ask:async()=>answers.shift(),sessionInfo:{displayName:'负责人'},drawingFor:()=> '001-Ab',allocationBelongsTo:rulesModule.exports.allocationBelongsTo,setNotice:s=>{throw Error(s)},setTimeout:()=>{},persist:async next=>{saved=next}};
+ const ui={...calendarModule,currentRows:displayed,data:state,today:()=> '2026-08-28',window:{confirm:()=>true},ask:async()=>answers.shift(),sessionInfo:{displayName:'负责人'},drawingFor:()=> '001-Ab',allocationBelongsTo:rulesModule.exports.allocationBelongsTo,setNotice:s=>{throw Error(s)},setTimeout:()=>{},persist:async next=>{saved=next}};
  vm.createContext(ui);vm.runInContext(ts.transpileModule(source.split(/\r?\n/).find(l=>l.includes('async function editAllocation(')),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,ui);
  await ui.editAllocation(displayed[0]);assert.equal(saved.allocations[0].worker,'B');assert.equal(saved.allocations[0].amount,40);assert.equal(saved.allocations[1],rows[1]);assert.equal(rows[0].worker,'A');
 });
-const context={orderDataProblems:rulesModule.exports.orderDataProblems,rankedOrderCandidates:rulesModule.exports.rankedOrderCandidates,isExternal:p=>p?.processMode==='external',PLAN_DAYS:6,today:()=> '2026-09-01',addDay:s=>{const d=new Date(s+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)},workday:s=>{const d=new Date(s+'T00:00:00Z');while(d.getUTCDay()===0)d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)}};
+const context={...calendarModule,orderDataProblems:rulesModule.exports.orderDataProblems,rankedOrderCandidates:rulesModule.exports.rankedOrderCandidates,isExternal:p=>p?.processMode==='external',PLAN_DAYS:6,today:()=> '2026-09-01',addDay:s=>{const d=new Date(s+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)},workday:s=>{const d=new Date(s+'T00:00:00Z');while(d.getUTCDay()===0)d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)}};
 vm.createContext(context);vm.runInContext(ts.transpileModule(source.slice(source.indexOf('function schedule('),source.indexOf('export default function SchedulerApp')),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
 test('actual scheduler retains order-specific choice across replan without changing same-part jobs',()=>{const result=context.schedule({workers,parts:[part],orders:[{...assign().order,due:'2026-09-10'},{...order,id:'o2',orderNo:'WO2',due:'2026-09-10'}]},false);assert.ok(result.allocations.some(a=>a.orderId==='o1'));assert.ok(result.allocations.filter(a=>a.orderId==='o1').every(a=>a.worker==='B'));assert.ok(result.allocations.filter(a=>a.orderId==='o2').every(a=>a.worker==='A'));assert.equal(result.allocations.reduce((n,a)=>n+a.amount,0),200)});
 test('actual six-day scheduler includes Saturday between Friday and Monday',()=>{

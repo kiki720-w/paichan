@@ -1,3 +1,4 @@
+import {capacityOn,workerBlockedOn,type CalendarEntry} from './production-calendar';
 // Customer feedback rules for drawing lookup, completion and order assignment.
 export type CompletionRecord={done:number;at:string;by:string;reason:string};
 export type WorkerAssignment={workerId:string;at:string;by:string;reason:string};
@@ -78,7 +79,7 @@ export function assignmentAwareIssues<T extends {key:string;reason:string}>(issu
   return reason?[{...issue,reason}]:[];
  });
 }
-export function assignOrderWorker<J extends Job,A extends {orderId?:string;orderNo:string;partCode:string;date:string;worker:string;amount:number;capacity:number;reason?:string;candidates?:string[]}>(order:J,orders:J[],rows:A[],workers:(SkillWorker&{name:string;overtime:number})[],workerId:string,reason:string,by:string,at:string,transfer:boolean){
+export function assignOrderWorker<J extends Job,A extends {orderId?:string;orderNo:string;partCode:string;date:string;worker:string;amount:number;capacity:number;reason?:string;candidates?:string[]}>(order:J,orders:J[],rows:A[],workers:(SkillWorker&{name:string;overtime:number})[],workerId:string,reason:string,by:string,at:string,transfer:boolean,calendar?:CalendarEntry[]){
  if(order.status==='已完成'||order.done>=order.qty)throw new Error('已完工订单无需指定加工人员');
  if(!reason.trim())throw new Error('请填写指定或调整原因');
  const worker=workers.find(w=>w.id===workerId&&w.active);
@@ -90,6 +91,7 @@ export function assignOrderWorker<J extends Job,A extends {orderId?:string;order
   if(rows.some(a=>!a.orderId&&a.orderNo===order.orderNo&&a.partCode===order.partCode&&!allocationBelongsTo(a,order,orders)))throw new Error('旧派工无法唯一对应订单，请先核对订单编号');
   const dates=new Set(rows.filter(a=>allocationBelongsTo(a,order,orders)).map(a=>a.date));
   for(const date of dates){
+   if(workerBlockedOn(worker.id,date,calendar))throw new Error(`${date} ${worker.name} 在生产日历中不可安排，请选择顺延或其他人员`);
    const total=rows.filter(a=>a.date===date&&(allocationBelongsTo(a,order,orders)||a.worker===worker.name)).reduce((n,a)=>n+a.amount,0);
    if(total>worker.overtime+.001)throw new Error(`${date} 转派后工作量 ${total.toFixed(1)} 超过 ${worker.name} 的含加班上限 ${worker.overtime}；可取消同步转派，再重新排产`);
   }
@@ -98,7 +100,7 @@ export function assignOrderWorker<J extends Job,A extends {orderId?:string;order
  return {order:{...order,workerAssignment:{workerId,reason:reason.trim(),by,at}},allocations};
 }
 // Rebuild only this order's unfinished work; all other allocations stay untouched.
-export function planOrderTransfer<A extends {orderId?:string;orderNo:string;partCode:string;date:string;worker:string;amount:number;capacity:number;name:string;due:string;status:string}>(order:Job,orders:Job[],rows:A[],workers:(SkillWorker&{name:string;capacity:number})[],workerId:string,unit:number,startDate:string){
+export function planOrderTransfer<A extends {orderId?:string;orderNo:string;partCode:string;date:string;worker:string;amount:number;capacity:number;name:string;due:string;status:string}>(order:Job,orders:Job[],rows:A[],workers:(SkillWorker&{name:string;capacity:number})[],workerId:string,unit:number,startDate:string,calendar?:CalendarEntry[]){
  const worker=workers.find(w=>w.id===workerId&&w.active);
  if(!worker||!Number.isFinite(worker.capacity)||worker.capacity<=0)throw new Error('所选员工缺少有效的正常日产能，请先确认人员能力');
  if(!Number.isFinite(unit)||unit<=0)throw new Error('缺少有效单件定额，无法顺延，请先补齐工件资料');
@@ -117,11 +119,11 @@ export function planOrderTransfer<A extends {orderId?:string;orderNo:string;part
  let remaining=required;
  const date=new Date(startDate+'T00:00:00Z');
  for(let days=0;remaining>0&&days<3660;days++,date.setUTCDate(date.getUTCDate()+1)){
-  if(date.getUTCDay()===0)continue;
-  const day=date.toISOString().slice(0,10),available=Math.max(0,worker.capacity-(loads.get(day)||0));
+  const day=date.toISOString().slice(0,10),capacity=capacityOn(worker,day,calendar);
+  const available=Math.max(0,capacity-(loads.get(day)||0));
   if(available<=0)continue;
   const amount=Math.min(remaining,available);
-  planned.push({orderId:order.id,orderNo:order.orderNo,partCode:order.partCode,name:order.name,drawingNo:order.drawingNo,date:day,worker:worker.name,amount,capacity:worker.capacity,due:order.due,status:day<=order.due?'按期':'延期',reason:'订单人工指定；按正常班剩余产能顺延',candidates:[worker.name]});
+  planned.push({orderId:order.id,orderNo:order.orderNo,partCode:order.partCode,name:order.name,drawingNo:order.drawingNo,date:day,worker:worker.name,amount,capacity,due:order.due,status:day<=order.due?'按期':'延期',reason:'订单人工指定；按正常班剩余产能顺延',candidates:[worker.name]});
   remaining=amount===remaining?0:remaining-amount;
  }
  if(remaining>0)throw new Error('十年内无法安排完剩余工作量，请核对定额及人员能力；未保存任何调整');
