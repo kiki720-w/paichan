@@ -33,7 +33,7 @@ export function previewBatchGaps(state:Pick<AppState,'orders'|'parts'|'workers'|
   if(order&&allocations.some(row=>!row.orderId&&row.orderNo===order.orderNo&&row.partCode===order.partCode&&!allocationBelongsTo(row,order,state.orders))){
    blocked.push('旧派工无法唯一对应订单，请先核对订单编号');
   }
-  if(!order||!part||blocked.length||order.status==='已完成'||part.processMode==='external'){
+  if(!order||!part||blocked.length||order.status==='已完成'||order.outsourcingParentId||part.processMode==='external'){
    shortages.push(gap);
    items.push({key:gapKey(gap),orderNo:gap.orderNo,added:0,remaining:gap.remainingWork,note:blocked.join('；')||'不属于未完成内部订单'});
    continue;

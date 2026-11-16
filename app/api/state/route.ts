@@ -51,6 +51,18 @@ export async function PUT(req:Request){
   let nextState=body.state;
   if(body.restoreBackupId){const backup=await env.DB.prepare(`SELECT data FROM factory_state_backup WHERE id=? AND factory=?`).bind(body.restoreBackupId,factory).first<{data:string}>();if(!backup)return Response.json({error:'backup_not_found'},{status:404});nextState=JSON.parse(backup.data)}
   if(!nextState)return Response.json({error:'missing_state'},{status:400});
+  const previousOrders=(current?JSON.parse(current.data)?.orders:[]) as {id:string;qty:number;partCode:string;orderNo:string;outsourcedQuantity?:number;approvalExecutionId?:string;outsourcingParentId?:string}[]|undefined;
+  const executedOrders=(Array.isArray(previousOrders)?previousOrders:[]).filter(order=>order.approvalExecutionId||order.outsourcedQuantity);
+  if(executedOrders.length){
+   const proposed=(nextState as {orders?:typeof previousOrders}).orders;
+   const byId=new Map((Array.isArray(proposed)?proposed:[]).map(order=>[order.id,order]));
+   if(executedOrders.some(order=>{
+    const replacement=byId.get(order.id);
+    return !replacement||replacement.qty!==order.qty||replacement.partCode!==order.partCode||
+     replacement.orderNo!==order.orderNo||replacement.outsourcedQuantity!==order.outsourcedQuantity||
+     replacement.approvalExecutionId!==order.approvalExecutionId||replacement.outsourcingParentId!==order.outsourcingParentId;
+   }))return Response.json({error:'approval_execution_order_changed',message:'本次操作会覆盖已执行审批关联的订单或数量。请先核对拆分和已执行记录，数据未保存。'},{status:422});
+  }
   let stateAdjusted=false;
   if(mesSync){
    const submitted=nextState as Partial<MesSyncState>;

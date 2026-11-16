@@ -7,12 +7,13 @@ type Decision={request:ApprovalRequest;status:'approved'|'rejected';note:string}
 const emptyForm=()=>({id:crypto.randomUUID(),kind:'urgent' as ApprovalKind,orderId:'',orderNo:'',partCode:'',quantity:'',due:'',reason:''});
 const formatTime=(value:string)=>new Date(value).toLocaleString('zh-CN',{hour12:false});
 
-export function ProductionApprovals({factory,role,orders,initialKind}:{
- factory:Factory;role:'main'|'factory';orders:OrderOption[];initialKind:ApprovalKind;
+export function ProductionApprovals({factory,role,orders,initialKind,onExecuted}:{
+ factory:Factory;role:'main'|'factory';orders:OrderOption[];initialKind:ApprovalKind;onExecuted:()=>Promise<unknown>;
 }){
  const [form,setForm]=useState(()=>({...emptyForm(),kind:initialKind}));
  const [requests,setRequests]=useState<ApprovalRequest[]>([]);
  const [filter,setFilter]=useState<ApprovalRequest['status']|'all'>('all');
+ const [execution,setExecution]=useState<ApprovalRequest|null>(null);
  const [decision,setDecision]=useState<Decision|null>(null);
  const [loading,setLoading]=useState(true);
  const [saving,setSaving]=useState(false);
@@ -39,16 +40,16 @@ export function ProductionApprovals({factory,role,orders,initialKind}:{
   setReload(value=>value+1);
  }
 
- async function send(method:'POST'|'PATCH',body:object){
+ async function send(method:'POST'|'PATCH',body:object,execute=false){
   setSaving(true);setNotice('');setError('');
   try{
    const response=await fetch(endpoint,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
    const result=await response.json();
    if(!response.ok){
-    if(response.status===409){setDecision(null);refresh()}
+    if(response.status===409){setDecision(null);setExecution(null);refresh()}
     throw Error(result.message||'保存失败，请重试。');
    }
-   setNotice(method==='POST'?'申请已提交，等待审批。':'审批结果已保存。');
+   setNotice(execute?('已执行，关联单号 '+result.orderNo+'。'):method==='POST'?'申请已提交，等待审批。':'审批结果已保存。');
    refresh();
    return true;
   }catch(problem){
@@ -108,9 +109,9 @@ export function ProductionApprovals({factory,role,orders,initialKind}:{
      <button className="import" type="button" disabled={loading||saving} onClick={()=>{setError('');refresh()}}>刷新记录</button>
     </div>
    </div>
-   <p className="rule-help">审批结果供计划员执行。订单、外协任务和派工需在业务页面另行处理。</p>
+   <p className="rule-help">审批通过后可确认执行。现有派工超出转外协后的内部余量时，需要先人工处理冲突。</p>
    {notice&&<p role="status" className="compact-note">{notice}</p>}
-   {error&&!decision&&<p role="alert" className="login-error">{error}</p>}
+   {error&&!decision&&!execution&&<p role="alert" className="login-error">{error}</p>}
    {visible.length>0?<div className="table-wrap capped-table"><table aria-label="审批记录">
     <thead><tr><th>申请</th><th>数量与日期</th><th>申请人及原因</th><th>结果</th></tr></thead>
     <tbody>{visible.map(item=><tr key={item.id}>
@@ -124,10 +125,32 @@ export function ProductionApprovals({factory,role,orders,initialKind}:{
       </div>}
       {item.decidedAt&&<small className="cell-note">{item.decidedBy} · {formatTime(item.decidedAt)}</small>}
       {item.decisionNote}
+      {item.status==='approved'&&(item.executedAt?
+       <small className="cell-note">已执行 · {item.executedBy} · {formatTime(item.executedAt)}<br/>关联单号 {item.executedOrderNo}</small>:
+       <div className="miora-actions"><span className="pending">待执行</span><button type="button" className="import" disabled={saving} onClick={()=>{setError('');setExecution(item)}}>{item.kind==='urgent'?'转为订单':'确认外协'}</button></div>)}
      </td>
     </tr>)}</tbody>
    </table></div>:<p className="compact-note">{loading?'正在读取申请…':'当前状态下没有申请记录。'}</p>}
   </section>
+  {execution&&<div className="dialog-backdrop" role="dialog" aria-modal="true" aria-label="执行生产审批">
+   <form onSubmit={async event=>{
+    event.preventDefault();
+    if(saving)return;
+    if(await send('PATCH',{id:execution.id,action:'execute'},true)){
+     setExecution(null);
+     try{await onExecuted()}catch{setNotice('审批已执行，请点击顶栏“刷新数据”查看最新订单。')}
+    }
+   }}>
+    <h3>{execution.kind==='urgent'?'确认转为紧急订单':'确认转出外协数量'}</h3>
+    <p>{execution.orderNo} / {execution.partCode}</p>
+    <p>批准数量 {execution.quantity}，要求日期 {execution.due}</p>
+    {error&&<p role="alert" className="login-error">{error}</p>}
+    <div className="dialog-actions">
+     <button type="button" className="import" disabled={saving} onClick={()=>{setExecution(null);setError('')}}>取消</button>
+     <button type="submit" className="primary" disabled={saving}>{saving?'执行中…':'确认执行'}</button>
+    </div>
+   </form>
+  </div>}
   {decision&&<div className="dialog-backdrop" role="dialog" aria-modal="true" aria-label="处理审批">
    <form onSubmit={decide}>
     <h3>处理{approvalKinds[decision.request.kind]}申请</h3>
