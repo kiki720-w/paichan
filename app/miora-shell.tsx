@@ -8,6 +8,7 @@ export const mioraSections = [
     {key: '看板', title: '生产看板', code: 'DSH', detail: '六个工作日的生产概况与异常'},
     {key: '数据导入', title: '数据导入', code: 'IMP', detail: '导入 MES Excel 并核对识别结果'},
     {key: '订单管理', title: '订单管理', code: 'ORD', detail: '订单核对、指定人员与完工登记'},
+    {key: '生产审批', title: '生产审批', code: 'APR', detail: '紧急插单、临时外协申请和审批结果'},
     {key: '排产结果', title: '排产结果', code: 'SCH', detail: '周计划、每日派工与计划发布'},
   ]},
   {title: '生产监控', items: [
