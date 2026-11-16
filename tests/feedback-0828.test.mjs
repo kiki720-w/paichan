@@ -1,5 +1,6 @@
 import {loadUi} from './load-ui.mjs';
 const calendarModule=loadUi('production-calendar');
+const {releasedOrder}=loadUi('process-quality');
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {readFileSync} from 'node:fs';
@@ -24,7 +25,7 @@ test('ambiguous legacy rows and empty reason are rejected',()=>{assert.throws(()
 test('reimport preserves assignment but accepts MES progress without manual completion',()=>{const old=assign().order;const result=preserveImportedCompletion([old],[{...order,done:3}]);assert.equal(result[0].done,3);assert.equal(result[0].workerAssignment.workerId,'b');assert.equal(preserveImportedCompletion(result,[{...order,done:4}])[0].done,4);assert.equal(preserveImportedCompletion([old],[])[0],old);const cleared=assign('').order;assert.equal(orderCandidates(preserveImportedCompletion([cleared],[order])[0],part,workers)[0].id,'a')});
 const source=readFileSync(new URL('../app/scheduler-app.tsx',import.meta.url),'utf8');
 function assignmentUi(){
- const ui={Error,data:{workers,parts:[part],orders:[order],allocations:rows,history:[{allocations:rows}]},rescheduleAssignment:false,setRescheduleAssignment:value=>{ui.rescheduleAssignment=value;},drawingFor:o=>o.drawingNo,assignmentSaving:false,assignmentForm:{workerId:'',reason:'',transfer:false},assigning:null,sessionInfo:{displayName:'负责人'},today:()=> '2026-08-28',window:{confirm:()=>true},isExternal:()=>false,...rulesModule.exports,
+ const ui={Error,releasedOrder,qualityConflicts:[],data:{workers,parts:[part],orders:[order],allocations:rows,history:[{allocations:rows}]},rescheduleAssignment:false,setRescheduleAssignment:value=>{ui.rescheduleAssignment=value;},drawingFor:o=>o.drawingNo,assignmentSaving:false,assignmentForm:{workerId:'',reason:'',transfer:false},assigning:null,sessionInfo:{displayName:'负责人'},today:()=> '2026-08-28',window:{confirm:()=>true},isExternal:()=>false,...rulesModule.exports,
   setAssigning:value=>{ui.assigning=value;},setAssignmentForm:value=>{ui.assignmentForm=value;},setAssignmentError:value=>{ui.error=value;},setAssignmentSaving:value=>{ui.assignmentSaving=value;},persist:async next=>{ui.stored=JSON.stringify(next);return true;}};
  vm.createContext(ui);
  vm.runInContext(ts.transpileModule(source.slice(source.indexOf(' function beginAssignment('),source.indexOf(' function beginCompletion(')),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,ui);
@@ -59,11 +60,11 @@ test('failed save or over-capacity transfer stays open and never silently falls 
 test('single-row edit resolves displayed copy to stored row and saves correct employee',async()=>{
  const state={workers,parts:[part],orders:[order],allocations:rows,scheduleShortages:[]};const displayed=rows.map(r=>({...r,drawingNo:'001-Ab'}));let saved;
  const answers=['图纸已核对','负责人','2026-09-01','B','40'];
- const ui={...calendarModule,currentRows:displayed,data:state,today:()=> '2026-08-28',window:{confirm:()=>true},ask:async()=>answers.shift(),sessionInfo:{displayName:'负责人'},drawingFor:()=> '001-Ab',allocationBelongsTo:rulesModule.exports.allocationBelongsTo,setNotice:s=>{throw Error(s)},setTimeout:()=>{},persist:async next=>{saved=next}};
+ const ui={...calendarModule,releasedOrder,currentRows:displayed,data:state,today:()=> '2026-08-28',window:{confirm:()=>true},ask:async()=>answers.shift(),sessionInfo:{displayName:'负责人'},drawingFor:()=> '001-Ab',allocationBelongsTo:rulesModule.exports.allocationBelongsTo,setNotice:s=>{throw Error(s)},setTimeout:()=>{},persist:async next=>{saved=next}};
  vm.createContext(ui);vm.runInContext(ts.transpileModule(source.split(/\r?\n/).find(l=>l.includes('async function editAllocation(')),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,ui);
  await ui.editAllocation(displayed[0]);assert.equal(saved.allocations[0].worker,'B');assert.equal(saved.allocations[0].amount,40);assert.equal(saved.allocations[1],rows[1]);assert.equal(rows[0].worker,'A');
 });
-const context={...calendarModule,orderDataProblems:rulesModule.exports.orderDataProblems,rankedOrderCandidates:rulesModule.exports.rankedOrderCandidates,isExternal:p=>p?.processMode==='external',PLAN_DAYS:6,today:()=> '2026-09-01',addDay:s=>{const d=new Date(s+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)},workday:s=>{const d=new Date(s+'T00:00:00Z');while(d.getUTCDay()===0)d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)}};
+const context={...calendarModule,releasedOrder,orderDataProblems:rulesModule.exports.orderDataProblems,rankedOrderCandidates:rulesModule.exports.rankedOrderCandidates,isExternal:p=>p?.processMode==='external',PLAN_DAYS:6,today:()=> '2026-09-01',addDay:s=>{const d=new Date(s+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)},workday:s=>{const d=new Date(s+'T00:00:00Z');while(d.getUTCDay()===0)d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)}};
 vm.createContext(context);vm.runInContext(ts.transpileModule(source.slice(source.indexOf('function schedule('),source.indexOf('export default function SchedulerApp')),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
 test('actual scheduler retains order-specific choice across replan without changing same-part jobs',()=>{const result=context.schedule({workers,parts:[part],orders:[{...assign().order,due:'2026-09-10'},{...order,id:'o2',orderNo:'WO2',due:'2026-09-10'}]},false);assert.ok(result.allocations.some(a=>a.orderId==='o1'));assert.ok(result.allocations.filter(a=>a.orderId==='o1').every(a=>a.worker==='B'));assert.ok(result.allocations.filter(a=>a.orderId==='o2').every(a=>a.worker==='A'));assert.equal(result.allocations.reduce((n,a)=>n+a.amount,0),200)});
 test('actual six-day scheduler includes Saturday between Friday and Monday',()=>{

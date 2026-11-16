@@ -1,3 +1,4 @@
+import {releasedOrder} from './process-quality';
 import {capacityOn,productionDays,clockMinutes,workingWindows} from './production-calendar';
 import {allocationBelongsTo, orderDataProblems, rankedOrderCandidates} from './feedback-rules';
 import type {Allocation, AppState, ScheduleShortage} from './scheduler-app';
@@ -8,7 +9,7 @@ export function gapKey(row:ScheduleShortage){
  return row.orderId||JSON.stringify([row.orderNo,row.partCode]);
 }
 
-export function previewBatchGaps(state:Pick<AppState,'orders'|'parts'|'workers'|'allocations'|'scheduleShortages'|'hourTierRules'|'productionCalendar'|'workingWindows'>,selected:readonly string[],startDate:string){
+export function previewBatchGaps(state:Pick<AppState,'orders'|'parts'|'workers'|'allocations'|'scheduleShortages'|'hourTierRules'|'productionCalendar'|'workingWindows'|'processTasks'>,selected:readonly string[],startDate:string){
  const from=new Date(startDate+'T00:00:00Z');
  if(!/^\d{4}-\d{2}-\d{2}$/.test(startDate)||!Number.isFinite(from.getTime())||from.toISOString().slice(0,10)!==startDate)throw Error('请选择有效的补排日期');
  if(!selected.length)throw Error('请选择至少一个产能缺口');
@@ -27,7 +28,7 @@ export function previewBatchGaps(state:Pick<AppState,'orders'|'parts'|'workers'|
  const items:{key:string;orderNo:string;added:number;remaining:number;note:string}[]=[];
  for(const gap of chosen){
   const matched=state.orders.filter(o=>gap.orderId?o.id===gap.orderId:o.orderNo===gap.orderNo&&o.partCode===gap.partCode);
-  const order=matched.length===1?matched[0]:undefined;
+  const order=matched.length===1?releasedOrder(matched[0],state.processTasks):undefined;
   const part=state.parts.find(p=>p.code===order?.partCode);
   const blocked=order?orderDataProblems(order,part):['无法唯一对应订单'];
   if(order&&allocations.some(row=>!row.orderId&&row.orderNo===order.orderNo&&row.partCode===order.partCode&&!allocationBelongsTo(row,order,state.orders))){
