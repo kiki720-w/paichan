@@ -1,6 +1,8 @@
 import {env} from 'cloudflare:workers';
 import {getSession,resolveFactory} from '../auth/access';
 import type {MesSyncState} from '../../server/mes-source';
+import type {AppState} from '../../scheduler-app';
+import {millingDispatch,millingDispatchConflict,validateMillingPlan} from '../../milling-pilot';
 
 type StateRow={data:string;revision:number};
 type SaveBody={state?:unknown;expectedRevision?:number;action?:string;summary?:string;restoreBackupId?:string};
@@ -51,6 +53,31 @@ export async function PUT(req:Request){
   let nextState=body.state;
   if(body.restoreBackupId){const backup=await env.DB.prepare(`SELECT data FROM factory_state_backup WHERE id=? AND factory=?`).bind(body.restoreBackupId,factory).first<{data:string}>();if(!backup)return Response.json({error:'backup_not_found'},{status:404});nextState=JSON.parse(backup.data)}
   if(!nextState)return Response.json({error:'missing_state'},{status:400});
+  const previous=current?JSON.parse(current.data) as AppState:undefined;
+  let millingChanged=false;
+  if(body.action==='确认铣工草稿'||body.action==='发布铣工派工'){
+   const plan=previous?.millingPlan,publish=body.action==='发布铣工派工';
+   try{
+    if(!previous||!plan||plan.publishedAt||Boolean(plan.confirmedAt)!==publish)throw Error('铣工草稿状态已变化，请刷新后重试。');
+    const at=new Date(),today=at.toLocaleDateString('en-CA',{timeZone:'Asia/Shanghai'});
+    const release=validateMillingPlan(previous,plan,today);
+    const millingPlan={...plan,revision:expected+1,...(publish?{publishedAt:at.toISOString()}:{confirmedAt:at.toISOString()})};
+    nextState={...previous,millingPlan,...(publish?{millingReleases:[...(previous.millingReleases||[]),release]}:{})};
+    millingChanged=true;
+   }catch(error){return Response.json({error:'milling_plan_conflict',message:error instanceof Error?error.message:'铣工派工复核失败。'},{status:422})}
+  }else if(!body.restoreBackupId){
+   const submitted=nextState as AppState;
+   const previousPlan=previous?.millingPlan;
+   if(JSON.stringify(submitted.millingReleases)!==JSON.stringify(previous?.millingReleases)||
+    ((submitted.millingPlan?.confirmedAt||submitted.millingPlan?.publishedAt)&&JSON.stringify(submitted.millingPlan)!==JSON.stringify(previousPlan))){
+    return Response.json({error:'milling_transition_required',message:'请通过铣工草稿的确认和发布操作更新派工。'},{status:422});
+   }
+   if(previous?.millingReleases?.length){
+    const existing=new Set((previous.allocations||[]).map(row=>JSON.stringify(row)));
+    const conflict=millingDispatchConflict((submitted.allocations||[]).filter(row=>!existing.has(JSON.stringify(row))),millingDispatch(previous));
+    if(conflict)return Response.json({error:'milling_resource_conflict',message:conflict.orderNo+' 与已发布铣工派工冲突，请核对人员、设备和日期。'},{status:422});
+   }
+  }
   const previousOrders=(current?JSON.parse(current.data)?.orders:[]) as {id:string;qty:number;partCode:string;orderNo:string;outsourcedQuantity?:number;approvalExecutionId?:string;outsourcingParentId?:string}[]|undefined;
   const executedOrders=(Array.isArray(previousOrders)?previousOrders:[]).filter(order=>order.approvalExecutionId||order.outsourcedQuantity);
   if(executedOrders.length){
@@ -63,7 +90,7 @@ export async function PUT(req:Request){
      replacement.approvalExecutionId!==order.approvalExecutionId||replacement.outsourcingParentId!==order.outsourcingParentId;
    }))return Response.json({error:'approval_execution_order_changed',message:'本次操作会覆盖已执行审批关联的订单或数量。请先核对拆分和已执行记录，数据未保存。'},{status:422});
   }
-  let stateAdjusted=false;
+  let stateAdjusted=millingChanged;
   if(mesSync){
    const submitted=nextState as Partial<MesSyncState>;
    const orderIds=new Set(Array.isArray(submitted.orders)?submitted.orders.map(order=>order?.id):[]);
@@ -71,7 +98,7 @@ export async function PUT(req:Request){
     return Response.json({error:'mes_linked_order_missing',message:'本次操作会移除已关联的 MES 订单，请先核对订单，数据未保存。'},{status:422});
    }
    const serverSync=body.action==='生成排产'&&submitted.mesSync?.planNeedsReview===false?{...mesSync,planNeedsReview:false}:mesSync;
-   stateAdjusted=JSON.stringify(submitted.mesSync)!==JSON.stringify(serverSync);
+   stateAdjusted=stateAdjusted||JSON.stringify(submitted.mesSync)!==JSON.stringify(serverSync);
    nextState={...submitted,mesSync:serverSync};
   }else if(typeof nextState==='object'&&'mesSync' in nextState){
    const {...sanitized}=nextState as Partial<MesSyncState>;

@@ -3,7 +3,7 @@ import type {ReactNode} from 'react';
 type Dispatch = {
   date: string; worker: string; orderNo: string; partCode: string; name: string;
   amount: number; capacity: number; due: string; status: string; drawingNo?: string;
-  machineName?:string; reason?: string; candidates?: string[]; startTime?:string; endTime?:string;
+  machineName?:string; reason?: string; candidates?: string[]; startTime?:string; endTime?:string; operation?:string; quantity?:number; planStatus?:string;
 };
 type Shortage = {
   orderId?: string; orderNo: string; partCode: string; name: string; due: string;
@@ -45,14 +45,15 @@ function PlanTask<T extends Dispatch>({row, onEdit, onAssign, onComplete, onSlot
       <span>{row.name}</span>
       <span className="mono">{row.amount.toFixed(1)} · {row.status}</span>
       {row.machineName&&<small>{row.machineName}</small>}
+      {row.operation&&<small>{row.operation} · {row.quantity} 件 · {row.planStatus}</small>}
       {row.startTime&&row.endTime&&<span className="mono">{row.startTime}–{row.endTime}</span>}
     </summary>
     <div className="miora-task-detail">
       <small>{row.partCode} · {row.drawingNo || '未提供图号'}</small>
-      <small>交期 {row.due || '待补充'} · {progress?.(row)}</small>
+      <small>交期 {row.due || '待补充'}{!row.operation&&<> · {progress?.(row)}</>}</small>
       {row.reason && <small>{row.reason}</small>}
       {!!row.candidates?.length && <small>候选：{row.candidates.join('、')}</small>}
-      <div className="schedule-actions">
+      {!row.operation&&<div className="schedule-actions">
         {onEdit && <button type="button" className="import" onClick={() => onEdit(row)}>人工调整</button>}
         {onAssign && <button type="button" className="import" onClick={() => onAssign(row)}>整单转派</button>}
         {onComplete && <button type="button" className="import" onClick={() => onComplete(row)}>登记完工</button>}
@@ -61,7 +62,7 @@ function PlanTask<T extends Dispatch>({row, onEdit, onAssign, onComplete, onSlot
           <button type="button" className="import" onClick={() => onSlot(row,-60)}>前移 1 小时</button>
           <button type="button" className="import" onClick={() => onSlot(row,60)}>后移 1 小时</button>
         </>}
-      </div>
+      </div>}
     </div>
   </details>;
 }

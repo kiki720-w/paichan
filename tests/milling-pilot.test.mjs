@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {loadUi} from './load-ui.mjs';
 
-const {generateMillingPlan}=loadUi('milling-pilot');
+const {generateMillingPlan,validateMillingPlan,millingDispatchConflict}=loadUi('milling-pilot');
 const date='2026-11-16';
 const predecessor={id:'turn',partCode:'P',workOrderNo:'WO',planNo:'PL',route:'TURN-MILL',operationName:'车工',plannedQty:10,completedQty:10,predecessorId:null,inspection:{passed:6,failed:4}};
 const milling={...predecessor,id:'mill',operationName:'铣工',completedQty:2,due:'2026-11-20',predecessorId:'turn',inspection:undefined};
@@ -30,4 +30,17 @@ test('milling holds uninspected work and reports missing resources without using
  assert.equal(missing.rows.length,0);
  assert.equal(missing.gaps.length,2);
  assert.match(missing.gaps[1].reason,/铣工单件定额.*铣工人员.*铣工设备/);
+});
+
+test('publication rechecks reduced release, personnel overlap and newly scheduled downtime',()=>{
+ const plan=generateMillingPlan(state,date,7);
+ const released=validateMillingPlan(state,plan,date);
+ assert.equal(released.through.mill,6);
+ assert.equal(released.rows[0].planStatus,'已发布');
+ assert.throws(()=>validateMillingPlan({...state,processTasks:[{...predecessor,inspection:{passed:5}},milling]},plan,date),/放行余量/);
+ const changed={...allocation,startTime:'09:15',endTime:'09:45',machineId:'other'};
+ assert.throws(()=>validateMillingPlan({...state,allocations:[allocation,changed]},plan,date),/冲突/);
+ assert.throws(()=>validateMillingPlan({...state,machines:[{...machine,stops:[{date,start:'09:00',end:'10:00'}]}]},plan,date),/冲突/);
+ assert.equal(millingDispatchConflict([changed],released.rows),changed);
+ assert.equal(generateMillingPlan({...state,millingReleases:[released]},date,8).rows.length,0);
 });

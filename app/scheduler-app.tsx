@@ -7,7 +7,7 @@ import {OutsourcingProgressPanel} from './outsourcing-progress-panel';
 import {recordOutsourcing,type OutsourcingAction,type OutsourcingProgress} from './outsourcing-progress';
 import {EquipmentLoadPanel} from './equipment-load-panel';
 import {MillingPilotPanel} from './milling-pilot-panel';
-import {generateMillingPlan,isMillingTask,type MillingPlan,type MillingRule} from './milling-pilot';
+import {generateMillingPlan,isMillingTask,millingDispatch,validateMillingPlan,type MillingPlan,type MillingRelease,type MillingRule} from './milling-pilot';
 import {currentPlanSnapshot, MioraPlan} from './miora-plan';
 import {buildDailyDispatch} from './dispatch-export';
 import {buildOrderTemplate} from './order-template';
@@ -30,7 +30,7 @@ import {drawingFromRow,orderDataProblems,matchWorkers,rankedOrderCandidates,comp
 type Worker={id:string;name:string;team:string;capacity:number;overtime:number;skills:string[];active:boolean};
 type Part={drawingNo?:string,id:string,code:string,name:string,category:string,unit:number,workers:string[],operationCode?:string,processMode?:'internal'|'external'};
 type Order={outsourcingProgress?:OutsourcingProgress,processTaskId?:string,outsourcingParentId?:string,approvalExecutionId?:string,outsourcedQuantity?:number,workerAssignment?:WorkerAssignment,drawingNo?:string,manualCompletion?:CompletionRecord,id:string,orderNo:string,customer:string,partCode:string,name:string,qty:number,done:number,due:string,priority:number,status:string};
-export type Allocation={machineId?:string,machineName?:string,orderId?:string,drawingNo?:string,date:string,worker:string,orderNo:string,partCode:string,name:string,amount:number,capacity:number,due:string,status:string,reason?:string,candidates?:string[],startTime?:string,endTime?:string};
+export type Allocation={operation?:string,quantity?:number,planStatus?:string,machineId?:string,machineName?:string,orderId?:string,drawingNo?:string,date:string,worker:string,orderNo:string,partCode:string,name:string,amount:number,capacity:number,due:string,status:string,reason?:string,candidates?:string[],startTime?:string,endTime?:string};
 type ImportIssue={key:string,orderNo?:string,partCode:string,name:string,reason:string};
 type PlanStatus='草稿'|'已确认'|'已发布'|'已撤回'|'已变更';
 export type ScheduleShortage={orderId?:string;drawingNo?:string;orderNo:string;partCode:string;name:string;due:string;requiredWork:number;scheduledWork:number;remainingWork:number;remainingQty:number;suggestedWorker?:string;estimatedFinish?:string;reason:string};
@@ -38,7 +38,7 @@ type ScheduleHistory={id:string;createdAt:string;label:string;allocations:Alloca
 type AuditEntry={id:string;actor:string;action:string;summary:string;createdAt:string;revision:number};
 type SkillEvidence={person:string,partCode:string,operation:string,count:number,lastAt:string,avgUnitTime:number};
 type ImportBatch={id:string,fileName:string,type:string,importedAt:string,rows:number,note:string};
-export type AppState={workers:Worker[],parts:Part[],orders:Order[],allocations:Allocation[],lastRun:string,issues?:ImportIssue[],importedAt?:string,history?:ScheduleHistory[],processTasks?:ProcessTask[],skillEvidence?:SkillEvidence[],importLog?:ImportBatch[],scheduleShortages?:ScheduleShortage[],hourTierRules?:HourTierRule[],planStatus?:PlanStatus,planSnapshotId?:string,planUpdatedAt?:string,planUpdatedBy?:string,planChangeNote?:string,workingWindows?:string,productionCalendar?:CalendarEntry[],machines?:Machine[],millingRules?:MillingRule[],millingPlan?:MillingPlan,excelImportConflicts?:ExcelImportConflict[],mesSync?:MesSyncState['mesSync']};
+export type AppState={workers:Worker[],parts:Part[],orders:Order[],allocations:Allocation[],lastRun:string,issues?:ImportIssue[],importedAt?:string,history?:ScheduleHistory[],processTasks?:ProcessTask[],skillEvidence?:SkillEvidence[],importLog?:ImportBatch[],scheduleShortages?:ScheduleShortage[],hourTierRules?:HourTierRule[],planStatus?:PlanStatus,planSnapshotId?:string,planUpdatedAt?:string,planUpdatedBy?:string,planChangeNote?:string,workingWindows?:string,productionCalendar?:CalendarEntry[],machines?:Machine[],millingRules?:MillingRule[],millingPlan?:MillingPlan,millingReleases?:MillingRelease[],excelImportConflicts?:ExcelImportConflict[],mesSync?:MesSyncState['mesSync']};
 type Factory='xian'|'xingping';
 type SessionInfo={role:'main'|'factory';factory?:Factory;displayName:string};
 type FactorySummary={orders:number;workers:number;parts:number;allocations:number;lastRun:string};
@@ -167,6 +167,11 @@ const mergeConfirmedXianWorkers=(workers:Worker[]=[])=>{
 
 function schedule(state:AppState,useOvertime=false){
  const loads=new Map<string,number>(),out:Allocation[]=[],shortages:ScheduleShortage[]=[],blocked:ImportIssue[]=[];
+ const reserved=(state.millingReleases||[]).flatMap(release=>release.rows);
+ for(const row of reserved){
+  const worker=state.workers.find(item=>item.name===row.worker);
+  if(worker){const key=worker.id+'|'+row.date;loads.set(key,(loads.get(key)||0)+row.amount)}
+ }
  const days=productionDays(today(),PLAN_DAYS,state.productionCalendar);
  const workOf=(o:Order)=>{const p=state.parts.find(x=>x.code===o.partCode);return Math.max(0,o.qty-o.done)*(p?.unit||0)};
  const orders=state.orders.map(order=>releasedOrder(order,state.processTasks)).filter(o=>!orderIsComplete(o)&&!isExternal(state.parts.find(p=>p.code===o.partCode),o)&&(!(o.processTaskId||o.id.startsWith('mes-process-order|'))||o.qty>o.done)).sort((a,b)=>a.priority-b.priority||(a.due||'').localeCompare(b.due||'')||workOf(a)-workOf(b));
@@ -188,13 +193,13 @@ function schedule(state:AppState,useOvertime=false){
      const capacity=capacityOn(w,date,state.productionCalendar,useOvertime,state.workingWindows);
      const workerRemaining=Math.max(0,capacity-(loads.get(w.id+'|'+date)||0));
      if(equipment.length){
-      const slots=jointMachineSlots({machines:equipment,partCode:part.code,worker:w,date,calendar:state.productionCalendar,windows:state.workingWindows,rows:out,remaining:remain,workerRemaining, overtime:useOvertime});
+      const slots=jointMachineSlots({machines:equipment,partCode:part.code,worker:w,date,calendar:state.productionCalendar,windows:state.workingWindows,rows:[...reserved,...out],remaining:remain,workerRemaining, overtime:useOvertime});
       plan.push(...slots.map(slot=>({...slot,date})));
       remain-=slots.reduce((sum,slot)=>sum+slot.amount,0);
       if(remain<=.001){finish=date;break}
       continue;
      }
-     if(out.some(row=>row.machineId&&row.worker===w.name&&row.date===date))continue;
+     if([...reserved,...out].some(row=>row.machineId&&row.worker===w.name&&row.date===date))continue;
      const amount=Math.min(remain,workerRemaining);
      if(amount<=0)continue;
      plan.push({date,amount,capacity});
@@ -303,7 +308,9 @@ export default function SchedulerApp(){
  const eligibleRows=currentRows.filter(row=>!orderBlocked(row));
  const dispatchRows=data.planStatus==='已发布'?currentRows:eligibleRows;
  const planWindow=productionDays(today(),PLAN_DAYS,data.productionCalendar);
- const planDates=[...new Set([...planWindow,...data.allocations.map(row=>row.date),...(resultDay?[resultDay]:[])])].sort();
+ const publishedMilling=millingDispatch(data);
+ const dailyRows=[...dispatchRows,...publishedMilling];
+ const planDates=[...new Set([...planWindow,...dailyRows.map(row=>row.date),...(resultDay?[resultDay]:[])])].sort();
  const qualityConflicts=useMemo(()=>{
   const candidates=data.orders.filter(order=>order.processTaskId||order.id.startsWith('mes-process-order|'));
   return candidates.filter(order=>{
@@ -413,6 +420,14 @@ export default function SchedulerApp(){
   const millingPlan=generateMillingPlan(data,today(),stateRevision+1);
   return persist({...data,millingPlan},`已保存 ${millingPlan.rows.length} 条铣工试排安排`,'生成铣工试排');
  }
+ async function changeMillingStatus(publish:boolean){
+  if(pendingSaves.current||refreshInProgress.current)return false;
+  const plan=data.millingPlan;
+  if(!plan||plan.publishedAt||Boolean(plan.confirmedAt)!==publish)throw Error('铣工草稿状态已变化，请刷新后重试。');
+  validateMillingPlan(data,plan,today());
+  const label=publish?'发布铣工派工':'确认铣工草稿';
+  return persist(data,label+'成功',label);
+ }
  async function refreshData(){
   if(pendingSaves.current||importing||refreshInProgress.current||loading)return;
   refreshInProgress.current=true;
@@ -491,7 +506,7 @@ export default function SchedulerApp(){
   }catch(error){setNotice(error instanceof Error?error.message:'调整时段失败')}
  }
  function exportDailyDispatch(date:string){
-  const output=buildDailyDispatch(factoryName(activeFactory),date,data.planStatus||'草稿',dispatchRows);
+  const output=buildDailyDispatch(factoryName(activeFactory),date,data.planStatus||'草稿',dailyRows);
   if(!output){setNotice('所选日期没有可导出的派工');return}
   try{XLSX.writeFile(output.workbook,output.filename);setNotice(`${date} 派工单已导出`)}
   catch{setNotice('派工单导出失败，请重试')}
@@ -776,7 +791,7 @@ export default function SchedulerApp(){
    load={planWindow.map(date=>({date,work:eligibleRows.filter(row=>row.date===date).reduce((total,row)=>total+row.amount,0),capacity:data.workers.reduce((total,worker)=>total+capacityOn(worker,date,data.productionCalendar,false,data.workingWindows),0)}))}
    issues={reviewIssues} shortage={{count:eligibleShortfalls.length,work:eligibleShortfalls.reduce((sum,row)=>sum+row.remainingWork,0)}}
    status={data.planStatus||'草稿'} onNavigate={setTab} onIssues={openOrderReview}/>
-   <EquipmentLoadPanel key={activeFactory} today={today()} machines={data.machines||[]} rows={data.allocations} shortages={eligibleShortfalls} windows={data.workingWindows} calendar={data.productionCalendar} onPlan={date=>{setResultDay(date);setResultView('day');setTab('排产结果')}}/>
+   <EquipmentLoadPanel key={activeFactory} today={today()} machines={data.machines||[]} rows={[...data.allocations,...publishedMilling]} shortages={eligibleShortfalls} windows={data.workingWindows} calendar={data.productionCalendar} onPlan={date=>{setResultDay(date);setResultView('day');setTab('排产结果')}}/>
   </>}
   {tab==='使用引导'&&<MioraGuide steps={guideSteps} onStart={()=>showGuide(0)} onNavigate={setTab}/>}
   {tab==='产品地图'&&<MioraProductMap onNavigate={setTab}/>}
@@ -793,7 +808,7 @@ export default function SchedulerApp(){
     {data.importLog?.length?<details className="data-details"><summary>导入记录 <span>{data.importLog.length} 次</span></summary><div className="table-wrap capped-table"><table><thead><tr><th>文件</th><th>内容</th><th>处理结果</th></tr></thead><tbody>{data.importLog.slice(0,20).map(x=><tr key={x.id}><td><b>{x.fileName}</b><small className="cell-note">{x.importedAt}</small></td><td><span className="ok">{x.type}</span><small className="cell-note">{x.rows} 行</small></td><td className="wrap-cell">{x.note}</td></tr>)}</tbody></table></div></details>:<div className="empty compact-empty"><b>尚未导入数据</b><span>选择MES导出的Excel即可开始。</span></div>}</section>{data.skillEvidence?.length?<details className="panel compact-section"><summary className="compact-summary"><span><b>历史人员与产品记录</b><small>仅用于辅助匹配</small></span><em>{data.skillEvidence.length} 条</em></summary><div className="table-wrap capped-table"><table><thead><tr><th>人员</th><th>物料编码</th><th>工序</th><th>次数</th><th>最近记录</th><th>平均工时</th></tr></thead><tbody>{data.skillEvidence.filter(e=>carOperation(e.operation)||e.operation==='历史绩效').slice(0,100).map((e,i)=><tr key={`${e.person}-${e.partCode}-${i}`}><td><b>{e.person}</b></td><td className="mono">{e.partCode}</td><td>{e.operation}</td><td>{e.count}</td><td>{e.lastAt}</td><td>{e.avgUnitTime?e.avgUnitTime.toFixed(2):'—'}</td></tr>)}</tbody></table></div></details>:null}</div>}
   {tab==='工序任务'&&<><ProcessQuality key={activeFactory} tasks={data.processTasks||[]} actor={sessionInfo.displayName}
    onSave={(processTasks,summary)=>persist({...data,processTasks},summary,'维护质检与工序放行')}/>
-   <MillingPilotPanel key={'milling-'+activeFactory} state={data} revision={stateRevision} today={today()} onRule={saveMillingRule} onGenerate={runMillingPilot}/>
+   <MillingPilotPanel key={'milling-'+activeFactory} state={data} revision={stateRevision} today={today()} onRule={saveMillingRule} onGenerate={runMillingPilot} onConfirm={()=>changeMillingStatus(false)} onPublish={()=>changeMillingStatus(true)}/>
   </>}
   {tab==='预警中心'&&<section className="panel"><div className="panel-title"><div><small>异常驱动排产</small><h3>工序预警与待确认事项</h3></div><span className={processWarnings.some(w=>w.level==='红色')?'late':'pending'}>{processWarnings.length} 项</span></div>{processWarnings.length?<div className="table-wrap"><table><thead><tr><th>级别</th><th>类型</th><th>工单</th><th>物料/工序</th><th>原因</th><th>要求完成</th></tr></thead><tbody>{processWarnings.slice(0,1000).map(w=><tr key={w.key}><td><span className={w.level==='红色'?'late':w.level==='黄色'?'pending':'ok'}>{w.level}</span></td><td>{w.type}</td><td className="mono">{w.task.workOrderNo}</td><td>{w.task.partCode} · {w.task.operationName}</td><td>{w.reason}</td><td>{w.task.due||'待补充'}</td></tr>)}</tbody></table></div>:<div className="empty"><b>当前没有工序预警</b><span>导入生产进度和报工记录后自动检查。</span></div>}</section>}
   {tab==='生产审批'&&<ProductionApprovals key={activeFactory} factory={activeFactory} role={sessionInfo.role} initialKind={approvalKind} onExecuted={()=>loadFactory(activeFactory)} orders={data.orders.filter(order=>order.done<order.qty&&order.status!=='已完成'&&!isExternal(data.parts.find(part=>part.code===order.partCode),order)).map(order=>({id:order.id,orderNo:order.orderNo,partCode:order.partCode,remaining:order.qty-order.done,due:order.due}))}/>}
@@ -844,7 +859,7 @@ export default function SchedulerApp(){
     <button type="button" className="import" onClick={editWorkingWindows}>设置工作时段</button>
    </div></section>
    {data.mesSync?.planNeedsReview&&<p className="import-issues" role="status">MES 数据已更新；现有计划未自动覆盖。请核对订单后重新排产。</p>}
-   <MioraPlan rows={dispatchRows} dates={planDates} view={resultView} day={resultDay} status={data.planStatus||'草稿'}
+   <MioraPlan rows={resultView==='day'?dailyRows:dispatchRows} dates={planDates} view={resultView} day={resultDay} status={data.planStatus||'草稿'}
     updated={data.planUpdatedBy?`${data.planUpdatedBy} · ${data.planUpdatedAt||''}`:data.lastRun} changeNote={data.planChangeNote}
     shortages={eligibleShortfalls} issues={reviewIssues} onView={setResultView} onDay={setResultDay} onIssues={openOrderReview} onExportDay={exportDailyDispatch}
     onEdit={editAllocation} onAssign={changeAllocationWorker} onComplete={completeAllocation} onBatch={()=>setBatchGapsOpen(true)} onSlot={changeDispatchSlot}
