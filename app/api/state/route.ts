@@ -108,7 +108,8 @@ export async function PUT(req:Request){
   }
   const mesOrderWrite=body.action==='同步 MES 工单';
   const mesDraftPublish=body.action==='发布 MES 自动草稿';
-  if((mesOrderWrite||mesDraftPublish)&&(session.role!=='main'||new URL(req.url).hostname!=='127.0.0.1'||body.restoreBackupId))return Response.json({error:'mes_sync_local_only'},{status:403});
+  const mesQuotaWrite=body.action==='补充 MES 工序定额';
+  if((mesOrderWrite||mesDraftPublish||mesQuotaWrite)&&(session.role!=='main'||new URL(req.url).hostname!=='127.0.0.1'||body.restoreBackupId))return Response.json({error:'mes_sync_local_only'},{status:403});
   const proposed=nextState as Partial<AppState>;
   const submittedOrders=Array.isArray(proposed.orders)?proposed.orders:[];
   if(mesOrderWrite){
@@ -136,6 +137,17 @@ export async function PUT(req:Request){
    if(JSON.stringify(proposed.mesOrderSync)!==JSON.stringify(previous?.mesOrderSync)){
     nextState={...proposed,mesOrderSync:previous?.mesOrderSync};stateAdjusted=true;
    }
+  }
+  if(mesQuotaWrite){
+   const quotas=proposed.mesOperationQuotas;
+   const changedFields=Object.keys({...previous,...proposed}).filter(key=>key!=='mesOperationQuotas');
+   if(!previous||changedFields.some(key=>JSON.stringify(previous[key as keyof AppState])!==JSON.stringify(proposed[key as keyof AppState])))
+    return Response.json({error:'mes_quota_unrelated_change',message:'补充工序定额时须保留原订单、派工和其他资料。'},{status:422});
+   if(!Array.isArray(quotas)||new Set(quotas.map(row=>row?.operationId)).size!==quotas.length||quotas.some(row=>
+    !row||[row.operationId,row.workOrder,row.operationNo,row.partCode,row.drawingNo,row.name].some(value=>typeof value!=='string'||!value.trim())||
+    !Number.isFinite(row.unit)||row.unit<=0))return Response.json({error:'invalid_mes_operation_quota',message:'MES 工序定额不完整或重复。'},{status:422});
+  }else if(JSON.stringify(proposed.mesOperationQuotas)!==JSON.stringify(previous?.mesOperationQuotas)){
+   nextState={...proposed,mesOperationQuotas:previous?.mesOperationQuotas};stateAdjusted=true;
   }
   const action=body.action||'更新数据',summary=body.summary||action,nextRevision=(current?.revision||0)+1,now=new Date().toISOString();
   if(current){

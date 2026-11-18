@@ -4,6 +4,7 @@ import {loadSchedulerModule} from './mes-scheduler-loader.mjs';
 
 const {schedule}=loadSchedulerModule('scheduler-app');
 const {allocationBelongsTo}=loadSchedulerModule('feedback-rules');
+const {partWithMesOperationQuota}=loadSchedulerModule('mes-operation-quotas');
 
 function existingPlanPublished(state){
  const current=state.history?.find(snapshot=>snapshot.id===state.planSnapshotId);
@@ -14,14 +15,16 @@ export function buildMesDraft(factory,state,rows,sourceVersion,baseRevision){
  const saved=state.allocations;
  const source=new Set(rows.map(row=>row.operationId));
  const {state:merged}=mergeMesLocalOrders(factory,state,rows);
- const units=new Map(state.parts.map(part=>[part.code,part.unit]));
+ const parts=new Map(state.parts.map(part=>[part.code,part]));
  const original=new Map(merged.orders.map(order=>[order.id,order]));
  const orders=merged.orders.flatMap(order=>{
-  if(!source.has(order.mesOperationId)||order.mesOrderHold||order.qty<=order.done||!units.get(order.partCode))return [];
+  if(!source.has(order.mesOperationId)||order.mesOrderHold||order.qty<=order.done)return [];
+  const unit=partWithMesOperationQuota(order,parts.get(order.partCode),state.mesOperationQuotas||[])?.unit;
+  if(!Number.isFinite(unit)||unit<=0)return [];
   const dispatch=saved.filter(row=>row.orderNo===order.orderNo&&row.partCode===order.partCode);
   if(dispatch.some(row=>!row.orderId&&!allocationBelongsTo(row,order,merged.orders)))return [];
   const used=dispatch.filter(row=>allocationBelongsTo(row,order,merged.orders)).reduce((sum,row)=>sum+row.amount,0);
-  const done=order.done+used/units.get(order.partCode);
+  const done=order.done+used/unit;
   return done<order.qty?[{...order,done}]:[];
  });
  const result=schedule({...merged,orders,allocations:saved},false,true);

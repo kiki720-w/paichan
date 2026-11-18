@@ -2,6 +2,7 @@
 import {useEffect,useMemo,useRef,useState,type ReactNode} from 'react';
 import * as XLSX from 'xlsx';
 import {MesCatalogPanel} from './mes-catalog-panel';
+import {partWithMesOperationQuota,type MesOperationQuota} from './mes-operation-quotas';
 import {MioraLogin, MioraShell} from './miora-shell';
 import {MioraDashboard, MioraGuide, MioraProductMap} from './miora-workspace';
 import {OutsourcingProgressPanel} from './outsourcing-progress-panel';
@@ -29,7 +30,7 @@ import type {MesSyncState} from './server/mes-source';
 import {drawingFromRow,orderDataProblems,matchWorkers,rankedOrderCandidates,completionStatus,recordCompletion,preserveImportedCompletion,allocationBelongsTo,remainingAllocations,assignmentAwareIssues,matchesOrderSearch,assignOrderWorker,planOrderTransfer,type HourTierRule,type WorkerAssignment,type CompletionRecord} from './feedback-rules';
 
 type Worker={id:string;name:string;team:string;capacity:number;overtime:number;skills:string[];active:boolean};
-type Part={drawingNo?:string,id:string,code:string,name:string,category:string,unit:number,workers:string[],operationCode?:string,processMode?:'internal'|'external'};
+export type Part={drawingNo?:string,id:string,code:string,name:string,category:string,unit:number,workers:string[],operationCode?:string,processMode?:'internal'|'external'};
 export type Order={mesOperationId?:string,mesOperationNo?:string,mesOrderHold?:string,outsourcingProgress?:OutsourcingProgress,processTaskId?:string,outsourcingParentId?:string,approvalExecutionId?:string,outsourcedQuantity?:number,workerAssignment?:WorkerAssignment,drawingNo?:string,manualCompletion?:CompletionRecord,id:string,orderNo:string,customer:string,partCode:string,name:string,qty:number,done:number,due:string,priority:number,status:string};
 export type Allocation={operation?:string,quantity?:number,planStatus?:string,machineId?:string,machineName?:string,orderId?:string,drawingNo?:string,date:string,worker:string,orderNo:string,partCode:string,name:string,amount:number,capacity:number,due:string,status:string,reason?:string,candidates?:string[],startTime?:string,endTime?:string};
 type ImportIssue={key:string,orderNo?:string,partCode:string,name:string,reason:string};
@@ -39,7 +40,7 @@ type ScheduleHistory={id:string;createdAt:string;label:string;allocations:Alloca
 type AuditEntry={id:string;actor:string;action:string;summary:string;createdAt:string;revision:number};
 type SkillEvidence={person:string,partCode:string,operation:string,count:number,lastAt:string,avgUnitTime:number};
 type ImportBatch={id:string,fileName:string,type:string,importedAt:string,rows:number,note:string};
-export type AppState={workers:Worker[],parts:Part[],orders:Order[],allocations:Allocation[],lastRun:string,issues?:ImportIssue[],importedAt?:string,history?:ScheduleHistory[],processTasks?:ProcessTask[],skillEvidence?:SkillEvidence[],importLog?:ImportBatch[],scheduleShortages?:ScheduleShortage[],hourTierRules?:HourTierRule[],planStatus?:PlanStatus,planSnapshotId?:string,planUpdatedAt?:string,planUpdatedBy?:string,planChangeNote?:string,workingWindows?:string,productionCalendar?:CalendarEntry[],machines?:Machine[],millingRules?:MillingRule[],millingPlan?:MillingPlan,millingReleases?:MillingRelease[],excelImportConflicts?:ExcelImportConflict[],mesOrderSync?:{lastChangedAt:string},mesSync?:MesSyncState['mesSync']};
+export type AppState={workers:Worker[],parts:Part[],orders:Order[],allocations:Allocation[],lastRun:string,issues?:ImportIssue[],importedAt?:string,history?:ScheduleHistory[],processTasks?:ProcessTask[],skillEvidence?:SkillEvidence[],importLog?:ImportBatch[],scheduleShortages?:ScheduleShortage[],hourTierRules?:HourTierRule[],planStatus?:PlanStatus,planSnapshotId?:string,planUpdatedAt?:string,planUpdatedBy?:string,planChangeNote?:string,workingWindows?:string,productionCalendar?:CalendarEntry[],machines?:Machine[],millingRules?:MillingRule[],millingPlan?:MillingPlan,millingReleases?:MillingRelease[],excelImportConflicts?:ExcelImportConflict[],mesOperationQuotas?:MesOperationQuota[],mesOrderSync?:{lastChangedAt:string},mesSync?:MesSyncState['mesSync']};
 type Factory='xian'|'xingping';
 type SessionInfo={role:'main'|'factory';factory?:Factory;displayName:string};
 type FactorySummary={orders:number;workers:number;parts:number;allocations:number;lastRun:string};
@@ -176,10 +177,14 @@ export function schedule(state:AppState,useOvertime=false,preserveExisting=false
   if(worker){const key=worker.id+'|'+row.date;loads.set(key,(loads.get(key)||0)+row.amount)}
  }
  const days=productionDays(today(),PLAN_DAYS,state.productionCalendar);
- const workOf=(o:Order)=>{const p=state.parts.find(x=>x.code===o.partCode);return Math.max(0,o.qty-o.done)*(p?.unit||0)};
- const orders=state.orders.map(order=>releasedOrder(order,state.processTasks)).filter(o=>!orderIsComplete(o)&&!isExternal(state.parts.find(p=>p.code===o.partCode),o)&&(!(o.processTaskId||o.id.startsWith('mes-process-order|'))||o.qty>o.done)).sort((a,b)=>a.priority-b.priority||(a.due||'').localeCompare(b.due||'')||workOf(a)-workOf(b));
+ const partFor=(order:Order)=>{
+  const part=state.parts.find(item=>item.code===order.partCode);
+  return state.mesOperationQuotas?.length?partWithMesOperationQuota(order,part,state.mesOperationQuotas):part;
+ };
+ const workOf=(o:Order)=>Math.max(0,o.qty-o.done)*(partFor(o)?.unit||0);
+ const orders=state.orders.map(order=>releasedOrder(order,state.processTasks)).filter(o=>!orderIsComplete(o)&&!isExternal(partFor(o),o)&&(!(o.processTaskId||o.id.startsWith('mes-process-order|'))||o.qty>o.done)).sort((a,b)=>a.priority-b.priority||(a.due||'').localeCompare(b.due||'')||workOf(a)-workOf(b));
  for(const order of orders){
-  const part=state.parts.find(p=>p.code===order.partCode);
+  const part=partFor(order);
   const {problems,ranked}=checkOrderForSchedule(order,part,state.workers,state.hourTierRules);
   if(problems.length){blocked.push(toReviewIssue(order,problems));continue}
   if(!part||!ranked)continue;
@@ -245,10 +250,11 @@ function checkOrderForSchedule(order:Order,part:Part|undefined,workers:Worker[],
 function toReviewIssue(order:Order,problems:string[]):ImportIssue{
  return {key:order.id,orderNo:order.orderNo,partCode:order.partCode,name:order.name,reason:problems.join('；')};
 }
-function collectOrderIssues(state:Pick<AppState,'orders'|'parts'|'workers'|'hourTierRules'>):ImportIssue[]{
+function collectOrderIssues(state:Pick<AppState,'orders'|'parts'|'workers'|'hourTierRules'|'mesOperationQuotas'>):ImportIssue[]{
  const parts=new Map(state.parts.map(part=>[part.code,part]));
  return state.orders.flatMap(order=>{
-  const part=parts.get(order.partCode);
+  const base=parts.get(order.partCode);
+  const part=state.mesOperationQuotas?.length?partWithMesOperationQuota(order,base,state.mesOperationQuotas):base;
   if(order.mesOrderHold)return [toReviewIssue(order,[order.mesOrderHold])];
   if(orderIsComplete(order)||isExternal(part,order))return [];
   const {problems}=checkOrderForSchedule(order,part,state.workers,state.hourTierRules);
@@ -850,6 +856,7 @@ export default function SchedulerApp(){
   </div>}
    {tab==='人员产能'&&<div className="split personnel-layout"><section className="panel personnel-panel"><div className="panel-title"><div><h3>车工人员与能力</h3><p className="panel-count">共 {data.workers.length} 名人员</p></div>{masterDataActions('workers')}</div>{masterDataImportError('workers')}<div className="table-wrap personnel-table-wrap"><table className="personnel-table"><thead><tr><th>人员</th><th>班组</th><th>日产能</th><th>适合加工</th><th>状态</th><th>操作</th></tr></thead><tbody>{data.workers.map(w=>{const skills=w.skills.join('、')||'根据历史报工整理';return <tr key={w.id}><td><b>{w.name}</b></td><td>{w.team}</td><td><b>{w.capacity||'待确认'}</b><small className="cell-note">加班 {w.overtime||'待确认'}</small></td><td><span className="skills-preview" title={skills}>{skills}</span></td><td><span className={w.active&&w.capacity>0?'ok':'pending'}>{w.active&&w.capacity>0?'已确认':'待确认'}</span></td><td><button type="button" className={w.active&&w.capacity>0?'import':'primary'} onClick={()=>editWorker(w)}>{w.active&&w.capacity>0?'修改':'补充'}</button></td></tr>})}</tbody></table></div></section><Form title={editingWorkerId?'修改并确认人员能力':'新增人员能力'} onSubmit={addWorker}><input placeholder="姓名（以Excel正式姓名为准）" value={workerForm.name} onChange={e=>setWorkerForm({...workerForm,name:e.target.value})}/><div className="row"><input type="number" min="0" placeholder="8小时标准日产能（必填）" value={workerForm.capacity} onChange={e=>setWorkerForm({...workerForm,capacity:e.target.value})}/><input type="number" min="0" placeholder="加班后标准日产能" value={workerForm.overtime} onChange={e=>setWorkerForm({...workerForm,overtime:e.target.value})}/></div><input placeholder="适合加工种类，用逗号分隔" value={workerForm.skills} onChange={e=>setWorkerForm({...workerForm,skills:e.target.value})}/>{editingWorkerId&&<button type="button" className="import" onClick={cancelWorkerEdit}>取消修改</button>}</Form></div>}
    {tab==='工件定额'&&<div className="split"><section className="panel"><div className="panel-title"><div><h3>工件能力配置</h3><p className="panel-count" role="status">{partSearch.trim()?`找到 ${visibleParts.length} 项，共 ${data.parts.length} 项`:`共 ${data.parts.length} 项工件定额`}</p></div>{masterDataActions('parts')}</div>{masterDataImportError('parts')}<div className="part-search"><span aria-hidden="true">⌕</span><input type="search" aria-label="搜索工件" placeholder="搜索物料编码、图号、名称或类别" value={partSearch} onChange={e=>setPartSearch(e.target.value)}/>{partSearch&&<button type="button" onClick={()=>setPartSearch('')}>清除</button>}</div><details className="data-details" open><summary>查看工件资料</summary><div className="table-wrap capped-table"><table><thead><tr><th>物料 / 图号</th><th>名称</th><th>方式</th><th>工时</th><th>指定人员</th><th>操作</th></tr></thead><tbody>{visibleParts.map(p=><tr key={p.id} className={editingPartCode===p.code?'order-row-selected':''}><td><b className="mono">{p.code}</b><small className="cell-note mono">{p.drawingNo||"未提供图号"}</small></td><td><b>{p.name}</b></td><td><span className={isExternal(p)?'pending':'ok'}>{isExternal(p)?'外协':'车工'}</span></td><td><b>{isExternal(p)?'—':p.unit}</b></td><td className="wrap-cell">{isExternal(p)?'不参与内部排产':p.workers.map(id=>data.workers.find(w=>w.id===id)?.name).filter(Boolean).join('、')||'按加工种类匹配'}</td><td><button type="button" className="import" onClick={()=>editPart(p)}>修改</button></td></tr>)}</tbody></table></div></details></section><Form id="part-edit-form" title={editingPartCode?`修改工件 · ${editingPartCode}`:'新增工件能力'} onSubmit={addPart}><input placeholder="物料编码（相同编码可更新）" value={partForm.code} readOnly={Boolean(editingPartCode)} onChange={e=>setPartForm({...partForm,code:e.target.value})}/><input placeholder="图号（原文件没有时可手动填写）" value={partForm.drawingNo} onChange={e=>setPartForm({...partForm,drawingNo:e.target.value})}/><input placeholder="工件名称" value={partForm.name} onChange={e=>setPartForm({...partForm,name:e.target.value})}/><input placeholder="加工类别" value={partForm.category} onChange={e=>setPartForm({...partForm,category:e.target.value})}/><div className="compact-note">加工工序由系统自动识别。</div><div className="row"><select value={partForm.processMode} onChange={e=>setPartForm({...partForm,processMode:e.target.value as 'internal'|'external'})}><option value="internal">内部加工</option><option value="external">外协加工</option></select><input type="number" step="0.01" min="0" placeholder="单件工时值" disabled={partForm.processMode==='external'} value={partForm.unit} onChange={e=>setPartForm({...partForm,unit:e.target.value})}/></div>{partForm.processMode==='internal'&&<><label>指定可加工人员（不指定则按加工种类匹配）</label><div className="checks">{data.workers.map(w=><label key={w.id}><input type="checkbox" checked={partForm.workers.includes(w.id)} onChange={e=>setPartForm({...partForm,workers:e.target.checked?[...partForm.workers,w.id]:partForm.workers.filter(x=>x!==w.id)})}/>{w.name}</label>)}</div></>}{editingPartCode&&<button type="button" className="import" onClick={cancelPartEdit}>取消修改</button>}</Form></div>}
+  {tab==='工件定额'&&Boolean(data.mesOperationQuotas?.length)&&<details className="panel" open><summary>已核对的 MES 工序定额（{data.mesOperationQuotas?.length} 项）</summary><div className="table-wrap capped-table"><table aria-label="MES 工序定额"><thead><tr><th>工单 / 工序</th><th>物料 / 图号</th><th>单件标准工作量</th><th>核对记录</th></tr></thead><tbody>{data.mesOperationQuotas?.map(quota=><tr key={quota.operationId}><td>{quota.workOrder} · {quota.operationNo}</td><td>{quota.partCode} · {quota.drawingNo}</td><td>{quota.unit}</td><td>{quota.evidence||'MES 报工校核'}</td></tr>)}</tbody></table></div></details>}
    {tab==='订单管理'&&<div className="compact-page">
    {typeof window!=='undefined'&&(window.location.hostname==='xuheng-aps.com'||window.location.origin==='http://127.0.0.1:3284')&&<MesCatalogPanel key={activeFactory} factory={activeFactory} mode="orders"/>}
    <section className="panel">

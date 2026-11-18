@@ -4,7 +4,7 @@ import {readFile,rename,writeFile} from 'node:fs/promises';
 import {dirname,join} from 'node:path';
 import {apsOrders} from './mes-order-sync.mjs';
 import {mergeMesLocalOrders} from '../app/server/mes-local-orders.ts';
-import {openCatalog,catalogFactories} from './mes-catalog-store.mjs';
+import {openCatalog,catalogFactories,catalogStatus} from './mes-catalog-store.mjs';
 import {buildMesDraft,changeMesDraft,applyPublishedMesDraft} from './mes-catalog-draft.mjs';
 import {loadSchedulerModule} from './mes-scheduler-loader.mjs';
 
@@ -51,7 +51,9 @@ async function refreshDraft(factory){
  }
  const normalized=normalizeState(state,factory);
  const codes=normalized.parts.filter(part=>part.unit>0&&part.processMode!=='external').map(part=>part.code);
- const rows=catalog.planningRows(factory,codes);
+ const selected=catalog.planningRows(factory,codes);
+ const quotaRows=catalog.linkedRows(factory,(normalized.mesOperationQuotas||[]).map(item=>item.operationId)).filter(row=>catalogStatus(row)==='pending');
+ const rows=[...new Map([...selected,...quotaRows].map(row=>[row.operationId,row])).values()];
  const draft=buildMesDraft(factory,normalized,rows,checkpoint.version,revision);
  draft.matchedOperations=rows.length;
  await saveDraft(factory,draft);
