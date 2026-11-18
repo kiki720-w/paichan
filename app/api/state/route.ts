@@ -106,6 +106,37 @@ export async function PUT(req:Request){
    nextState=sanitized;
    stateAdjusted=true;
   }
+  const mesOrderWrite=body.action==='同步 MES 工单';
+  const mesDraftPublish=body.action==='发布 MES 自动草稿';
+  if((mesOrderWrite||mesDraftPublish)&&(session.role!=='main'||new URL(req.url).hostname!=='127.0.0.1'||body.restoreBackupId))return Response.json({error:'mes_sync_local_only'},{status:403});
+  const proposed=nextState as Partial<AppState>;
+  const submittedOrders=Array.isArray(proposed.orders)?proposed.orders:[];
+  if(mesOrderWrite){
+   const preserved=['parts','workers','machines','productionCalendar','workingWindows','allocations','history','planStatus','planSnapshotId','planUpdatedAt','planUpdatedBy','planChangeNote','lastRun','scheduleShortages','processTasks','millingPlan','millingReleases'] as const;
+   if(previous&&preserved.some(key=>JSON.stringify(previous[key])!==JSON.stringify(proposed[key])))return Response.json({error:'mes_plan_write_forbidden'},{status:422});
+  }else if(mesDraftPublish){
+   const old=previous?.allocations||[], rows=proposed.allocations||[];
+   const priorHistory=previous?.history||[], history=proposed.history||[];
+   const existing=new Map(submittedOrders.map(order=>[order.id,order]));
+   const preserved=['parts','workers','machines','productionCalendar','workingWindows','processTasks','millingPlan','millingReleases','mesOrderSync'] as const;
+   const validPlan=proposed.planStatus==='已发布'&&history[0]?.id===proposed.planSnapshotId&&history[0]?.status==='已发布'&&
+    Boolean(history[0]?.confirmedBy&&history[0]?.publishedBy)&&JSON.stringify(history[0]?.allocations)===JSON.stringify(rows);
+   if(!validPlan||rows.length<=old.length||JSON.stringify(rows.slice(0,old.length))!==JSON.stringify(old)||
+    JSON.stringify(history.slice(1))!==JSON.stringify(priorHistory)||
+    (previous?.orders||[]).some(order=>{const next=existing.get(order.id);return !next||next.orderNo!==order.orderNo||next.partCode!==order.partCode;})||
+    preserved.some(key=>JSON.stringify(previous?.[key])!==JSON.stringify(proposed[key])))
+    return Response.json({error:'mes_draft_cannot_replace_plan',message:'MES 草稿必须保留已有订单、派工和历史计划。'},{status:422});
+  }else{
+   const before=new Map((previous?.orders||[]).filter(order=>order.mesOperationId).map(order=>[order.id,order]));
+   const after=new Map(submittedOrders.filter(order=>order.mesOperationId).map(order=>[order.id,order]));
+   if(before.size!==after.size||[...before].some(([id,old])=>{
+    const order=after.get(id);
+    return !order||(['orderNo','partCode','qty','done','mesOperationId','mesOperationNo','mesOrderHold'] as const).some(key=>old[key]!==order[key]);
+   }))return Response.json({error:'mes_linked_order_changed',message:'当前操作会覆盖 MES 同步订单，请先核对。'},{status:422});
+   if(JSON.stringify(proposed.mesOrderSync)!==JSON.stringify(previous?.mesOrderSync)){
+    nextState={...proposed,mesOrderSync:previous?.mesOrderSync};stateAdjusted=true;
+   }
+  }
   const action=body.action||'更新数据',summary=body.summary||action,nextRevision=(current?.revision||0)+1,now=new Date().toISOString();
   if(current){
    await env.DB.prepare(`INSERT INTO factory_state_backup(id,factory,data,revision,actor,action,created_at) VALUES(?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),factory,current.data,current.revision,actor,action,now).run();

@@ -8,12 +8,31 @@ const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
 
 const { d1, r2 } = hostingConfig;
 
+const authVariableNames = [
+  "APP_USERNAME",
+  "APP_PASSWORD",
+  "APP_SESSION_TOKEN",
+  "XIAN_USERNAME",
+  "XIAN_PASSWORD",
+  "XIAN_SESSION_TOKEN",
+  "XINGPING_USERNAME",
+  "XINGPING_PASSWORD",
+  "XINGPING_SESSION_TOKEN",
+] as const;
+
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
+
+const mesCatalogProxy = process.env.MES_CATALOG_PROXY_ORIGIN;
 
 const localBindingConfig = {
   main: "./worker/index.ts",
   compatibility_flags: ["nodejs_compat"],
+  vars: Object.fromEntries(
+    authVariableNames.flatMap((name) =>
+      process.env[name] ? [[name, process.env[name]]] : [],
+    ),
+  ),
   d1_databases: d1
     ? [
         {
@@ -44,9 +63,13 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
-    server: isCodexSeatbeltSandbox
-      ? { watch: { useFsEvents: false, usePolling: true } }
-      : undefined,
+    server: {
+      ...(mesCatalogProxy && { proxy: { '/api/mes-catalog': mesCatalogProxy } }),
+      allowedHosts: ["xuheng-aps.com", "www.xuheng-aps.com"],
+      ...(isCodexSeatbeltSandbox
+        ? { watch: { useFsEvents: false, usePolling: true } }
+        : {}),
+    },
     plugins: [
       vinext(),
       sites(),

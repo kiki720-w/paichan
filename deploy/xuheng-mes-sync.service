@@ -1,0 +1,22 @@
+[Unit]
+Description=Read MES replica and synchronize Xuheng orders
+After=xuheng-aps.service docker.service
+Wants=xuheng-aps.service
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+WorkingDirectory=/opt/xuheng-mes-sync
+StateDirectory=xuheng-mes-sync
+StateDirectoryMode=0700
+EnvironmentFile=/etc/xuheng-aps.env
+EnvironmentFile=/etc/xuheng-mes-sync.env
+ExecStart=/usr/bin/node /opt/xuheng-mes-sync/scripts/mes-order-sync.mjs
+TimeoutStartSec=55
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+IPAddressDeny=any
+IPAddressAllow=localhost

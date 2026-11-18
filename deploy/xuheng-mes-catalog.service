@@ -1,0 +1,35 @@
+[Unit]
+Description=Xuheng APS MES catalog and scheduling drafts
+After=xuheng-aps.service docker.service
+Wants=xuheng-aps.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/xuheng-mes-catalog
+StateDirectory=xuheng-mes-catalog
+StateDirectoryMode=0700
+EnvironmentFile=/etc/xuheng-aps.env
+EnvironmentFile=/etc/xuheng-mes-sync.env
+Environment=MES_CATALOG_APP_ROOT=/opt/paichan
+Environment=MES_APS_ORIGIN=http://127.0.0.1:3000
+Environment=MES_CATALOG_PUBLIC_ORIGIN=https://xuheng-aps.com
+Environment=MES_CATALOG_MYSQL_PORT=12011
+Environment=MES_CATALOG_PAGE_SIZE=3000
+Environment=MES_CATALOG_API_PORT=3229
+Environment=MES_CATALOG_LINK_UPDATES=0
+ExecStart=/usr/bin/node /opt/xuheng-mes-catalog/scripts/mes-catalog-run.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+[Install]
+WantedBy=multi-user.target
