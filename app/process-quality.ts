@@ -1,9 +1,11 @@
+import type {MillingReport} from './milling-completion';
+
 export type Inspection={passed:number;failed:number;by:string;at:string};
 export type ProcessTask={
  drawingNo?:string;id:string;workOrderNo:string;planNo:string;partCode:string;partName:string;route:string;
  operationNo:string;operationName:string;plannedQty:number;completedQty:number;remainingQty:number;due:string;
  status:string;lastReportAt?:string;producers?:string[];unitTime?:number;
- predecessorId?:string|null;inspection?:Inspection;
+ predecessorId?:string|null;inspection?:Inspection;millingReports?:MillingReport[];
 };
 type ProcessOrder={id:string;qty:number;done:number;partCode:string;processTaskId?:string};
 const slug=(value:string)=>value.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g,'-');

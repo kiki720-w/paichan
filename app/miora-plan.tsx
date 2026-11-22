@@ -53,6 +53,7 @@ function PlanTask<T extends Dispatch>({row, onEdit, onAssign, onComplete, onSlot
       <small>交期 {row.due || '待补充'}{!row.operation&&<> · {progress?.(row)}</>}</small>
       {row.reason && <small>{row.reason}</small>}
       {!!row.candidates?.length && <small>候选：{row.candidates.join('、')}</small>}
+      {row.operation==='铣工'&&<div className="schedule-actions"><small>{progress?.(row)}</small>{onComplete&&<button type="button" className="import" onClick={()=>onComplete(row)}>登记或更正铣工完工</button>}</div>}
       {!row.operation&&<div className="schedule-actions">
         {onEdit && <button type="button" className="import" onClick={() => onEdit(row)}>人工调整</button>}
         {onAssign && <button type="button" className="import" onClick={() => onAssign(row)}>整单转派</button>}

@@ -13,7 +13,8 @@ export const mioraSections = [
   ]},
   {title: '生产监控', items: [
     {key: '工序任务', title: '工序任务', code: 'OPT', detail: '工单、工序和报工进度'},
-    {key: '预警中心', title: '预警中心', code: 'ALR', detail: '延期、前序和资料缺失预警'},
+    {key: '预警中心', title: '预警中心', code: 'ALR', detail: '进度核对、工序预警与异常跟踪'},
+    {key: '情景试算', title: '情景试算', code: 'SIM', detail: '比较插单、请假或交期变化对计划的影响'},
   ]},
   {title: '能力与记录', items: [
     {key: '人员产能', title: '人员产能', code: 'CAP', detail: '班组人员、日产能和技能'},

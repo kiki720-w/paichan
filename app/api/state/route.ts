@@ -3,9 +3,10 @@ import {getSession,resolveFactory} from '../auth/access';
 import type {MesSyncState} from '../../server/mes-source';
 import type {AppState} from '../../scheduler-app';
 import {millingDispatch,millingDispatchConflict,validateMillingPlan} from '../../milling-pilot';
+import {recordMillingCompletion,type MillingCompletion} from '../../milling-completion';
 
 type StateRow={data:string;revision:number};
-type SaveBody={state?:unknown;expectedRevision?:number;action?:string;summary?:string;restoreBackupId?:string};
+type SaveBody={state?:unknown;expectedRevision?:number;action?:string;summary?:string;restoreBackupId?:string;millingCompletion?:MillingCompletion};
 
 const initialized=new WeakMap<object,Promise<void>>();
 function ensure(){
@@ -55,7 +56,16 @@ export async function PUT(req:Request){
   if(!nextState)return Response.json({error:'missing_state'},{status:400});
   const previous=current?JSON.parse(current.data) as AppState:undefined;
   let millingChanged=false;
-  if(body.action==='确认铣工草稿'||body.action==='发布铣工派工'){
+  if(body.millingCompletion){
+   try{
+    if(!previous||body.restoreBackupId)throw Error('请刷新后从每日派工登记。');
+    const result=recordMillingCompletion(previous,body.millingCompletion,actor,new Date().toISOString(),crypto.randomUUID());
+    nextState=result.state;
+    body.action=body.millingCompletion.batchId?'更正铣工完工':'登记铣工完工';
+    body.summary=result.summary;
+    millingChanged=true;
+   }catch(error){return Response.json({error:'milling_completion_conflict',message:error instanceof Error?error.message:'铣工完工保存失败。'},{status:422})}
+  }else if(body.action==='确认铣工草稿'||body.action==='发布铣工派工'){
    const plan=previous?.millingPlan,publish=body.action==='发布铣工派工';
    try{
     if(!previous||!plan||plan.publishedAt||Boolean(plan.confirmedAt)!==publish)throw Error('铣工草稿状态已变化，请刷新后重试。');
@@ -67,6 +77,15 @@ export async function PUT(req:Request){
    }catch(error){return Response.json({error:'milling_plan_conflict',message:error instanceof Error?error.message:'铣工派工复核失败。'},{status:422})}
   }else if(!body.restoreBackupId){
    const submitted=nextState as AppState;
+   if(submitted.progressTolerance!==undefined&&(!Number.isSafeInteger(submitted.progressTolerance)||submitted.progressTolerance<0)){
+    return Response.json({message:'进度容差须为非负整件数。'},{status:422});
+   }
+   const previousReports=new Map((previous?.processTasks||[]).filter(task=>task.millingReports?.length).map(task=>[task.id,task]));
+   const submittedReports=new Map((submitted.processTasks||[]).filter(task=>task.millingReports?.length).map(task=>[task.id,task]));
+   if(previousReports.size!==submittedReports.size||[...previousReports].some(([id,task])=>{
+    const proposed=submittedReports.get(id);
+    return !proposed||proposed.completedQty!==task.completedQty||proposed.plannedQty<task.completedQty||JSON.stringify(proposed.millingReports)!==JSON.stringify(task.millingReports);
+   }))return Response.json({error:'milling_completion_required',message:'已有铣工完工记录，请通过每日派工登记或更正完工。'},{status:422});
    const previousPlan=previous?.millingPlan;
    if(JSON.stringify(submitted.millingReleases)!==JSON.stringify(previous?.millingReleases)||
     ((submitted.millingPlan?.confirmedAt||submitted.millingPlan?.publishedAt)&&JSON.stringify(submitted.millingPlan)!==JSON.stringify(previousPlan))){
@@ -100,7 +119,7 @@ export async function PUT(req:Request){
    const serverSync=body.action==='生成排产'&&submitted.mesSync?.planNeedsReview===false?{...mesSync,planNeedsReview:false}:mesSync;
    stateAdjusted=stateAdjusted||JSON.stringify(submitted.mesSync)!==JSON.stringify(serverSync);
    nextState={...submitted,mesSync:serverSync};
-  }else if(typeof nextState==='object'&&'mesSync' in nextState){
+  }else if(nextState!==null&&typeof nextState==='object'&&'mesSync' in nextState){
    const {...sanitized}=nextState as Partial<MesSyncState>;
    delete sanitized.mesSync;
    nextState=sanitized;

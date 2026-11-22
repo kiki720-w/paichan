@@ -4,7 +4,7 @@ const enc=new TextEncoder();
 const bytesToHex=(bytes:Uint8Array)=>Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
 const hexToBytes=(hex:string)=>new Uint8Array(hex.match(/.{1,2}/g)?.map(x=>parseInt(x,16))||[]);
 
-async function derive(password:string,salt:Uint8Array){
+async function derive(password:string,salt:Uint8Array<ArrayBuffer>){
  const key=await crypto.subtle.importKey('raw',enc.encode(password),'PBKDF2',false,['deriveBits']);
  const bits=await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt,iterations:120000},key,256);
  return bytesToHex(new Uint8Array(bits));

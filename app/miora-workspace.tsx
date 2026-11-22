@@ -15,7 +15,7 @@ export function MioraDashboard({factory, summaries, metrics, load, issues, short
   return <>
     <section className="cards miora-dashboard-metrics" aria-label="当前工厂生产指标">
       {[
-        ['待排车工订单', metrics.pending, 'MES 导入与手工录入'],
+        ['待排车工订单', metrics.pending, 'MES 同步、Excel 导入与手工录入'],
         ['剩余标准工作量', metrics.work.toFixed(1), '剩余数量 × 单件工时值'],
         ['预计延期', metrics.late, '已排计划中的延期订单'],
         ['已启用人员', metrics.workers, '当前工厂'],
@@ -60,7 +60,7 @@ export function MioraDashboard({factory, summaries, metrics, load, issues, short
 export function MioraProductMap({onNavigate}: {onNavigate: (page: string) => void}) {
   return <section className="panel">
     <div className="panel-title"><div><small>当前功能范围</small><h3>模块总表</h3></div><span className="ok">车工排产</span></div>
-    <p className="compact-note">正式生产数据入口为 MES Excel。模块权限与数据范围由登录账号决定。</p>
+    <p className="compact-note">支持 MES 自动同步和 Excel 导入。模块权限与数据范围由登录账号决定。</p>
     <div className="table-wrap"><table>
       <thead><tr><th>编号</th><th>模块</th><th>主要用途</th><th>状态</th></tr></thead>
       <tbody>{mioraPages.map(item => <tr key={item.key}><td className="mono">{item.code}</td><td><button type="button" className="miora-link" onClick={() => onNavigate(item.key)}>{item.title}</button></td><td>{item.detail}</td><td><span className="ok">现有功能</span></td></tr>)}</tbody>

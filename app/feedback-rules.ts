@@ -19,6 +19,7 @@ export function orderDataProblems(order:Pick<Job,'due'|'drawingNo'|'qty'|'done'>
  else if(!validWorkDate(due))problems.push('交期无效');
  if(!text(order.drawingNo)&&!text(part?.drawingNo))problems.push('缺少图号');
  if(!Number.isFinite(order.qty)||order.qty<=0||order.qty<order.done)problems.push('订单数量无效');
+ if(!Number.isFinite(order.done)||order.done<0)problems.push('完工量无效');
  const unit=part?.unit??0;
  if(!Number.isFinite(unit)||unit<=0)problems.push('缺少有效单件工时');
  return problems;

@@ -14,7 +14,7 @@ function subtract(windows:Interval[],blocked:Interval){
 }
 const textTime=(minute:number)=>String(Math.floor(minute/60)).padStart(2,'0')+':'+String(minute%60).padStart(2,'0');
 
-export function machineDailyLoad(machine:Machine,date:string,rows:Occupation[],windows?:string,calendar:Calendar[]=[]){
+export function machineDailyLoad(machine:Machine,date:string,rows:Occupation[],windows?:string,calendar:CalendarEntry[]=[]){
  const reservations=rows.filter(row=>row.date===date);
  const assigned=reservations.filter(row=>row.machineId===machine.id);
  const unassigned=reservations.filter(row=>!row.machineId&&machine.partCodes.includes(row.partCode)).length;

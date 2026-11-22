@@ -41,7 +41,7 @@ const reply=(body:unknown,status=200)=>Response.json(body,{status,headers:{'Cach
 const problem=(message:string,status=400)=>reply({message},status);
 const clean=(value:unknown)=>typeof value==='string'?value.trim():'';
 const isId=(value:string)=>/^[a-f0-9-]{36}$/i.test(value);
-type FactoryOrder={outsourcingParentId?:string;id:string;orderNo:string;partCode:string;qty:number;done:number;status:string};
+type FactoryOrder={outsourcingProgress?:unknown;outsourcingParentId?:string;id:string;orderNo:string;partCode:string;qty:number;done:number;status:string};
 
 async function readBody(request:Request){
  const raw=await request.text();

@@ -1,13 +1,20 @@
 'use client';
 import {useEffect,useMemo,useRef,useState,type ReactNode} from 'react';
 import * as XLSX from 'xlsx';
-import {MesCatalogPanel} from './mes-catalog-panel';
-import {partWithMesOperationQuota,type MesOperationQuota} from './mes-operation-quotas';
 import {MioraLogin, MioraShell} from './miora-shell';
 import {MioraDashboard, MioraGuide, MioraProductMap} from './miora-workspace';
+import {MesCatalogPanel} from './mes-catalog-panel';
+import {schedule,PLAN_DAYS,isExternal,orderIsComplete,checkOrderForSchedule,toReviewIssue} from './scheduling-engine';
+import type {DeliveryBatch} from './delivery-batches';
+import {SchedulingScenarioPanel} from './scheduling-scenario-panel';
+import {DispatchProgressPanel} from './dispatch-progress-panel';
+import {ApsMetricsPanel} from './aps-metrics-panel';
+import {partWithMesOperationQuota,type MesOperationQuota} from './mes-operation-quotas';
 import {OutsourcingProgressPanel} from './outsourcing-progress-panel';
 import {recordOutsourcing,type OutsourcingAction,type OutsourcingProgress} from './outsourcing-progress';
 import {EquipmentLoadPanel} from './equipment-load-panel';
+import {MillingCompletionDialog} from './milling-completion-dialog';
+import {millingBatches,millingDispatchKey,recordMillingCompletion,type MillingCompletion} from './milling-completion';
 import {MillingPilotPanel} from './milling-pilot-panel';
 import {generateMillingPlan,isMillingTask,millingDispatch,validateMillingPlan,type MillingPlan,type MillingRelease,type MillingRule} from './milling-pilot';
 import {currentPlanSnapshot, MioraPlan} from './miora-plan';
@@ -19,7 +26,7 @@ import {processRelease,processOrderTask,releasedOrder,type ProcessTask} from './
 import {ProcessQuality} from './process-quality-panel';
 import {ProductionApprovals} from './production-approvals';
 import type {ApprovalKind} from './approval-types';
-import {jointMachineSlots,machineSlotAvailable,type Machine,type MachineSlot} from './equipment-capacity';
+import {machineSlotAvailable,type Machine} from './equipment-capacity';
 import {EquipmentPanel} from './equipment-panel';
 import {ProductionCalendarPanel} from './production-calendar-panel';
 import {reviewExcelImport,type ExcelImportConflict} from './excel-import-review';
@@ -27,20 +34,20 @@ import {ExcelImportPreview} from './excel-import-preview';
 import {MioraGapDialog} from './miora-gap-dialog';
 import {setDispatchSlot,shiftDispatchSlot,validateWorkingWindows,type previewBatchGaps} from './scheduling-operations';
 import type {MesSyncState} from './server/mes-source';
-import {drawingFromRow,orderDataProblems,matchWorkers,rankedOrderCandidates,completionStatus,recordCompletion,preserveImportedCompletion,allocationBelongsTo,remainingAllocations,assignmentAwareIssues,matchesOrderSearch,assignOrderWorker,planOrderTransfer,type HourTierRule,type WorkerAssignment,type CompletionRecord} from './feedback-rules';
+import {drawingFromRow,orderDataProblems,matchWorkers,completionStatus,recordCompletion,preserveImportedCompletion,allocationBelongsTo,remainingAllocations,assignmentAwareIssues,matchesOrderSearch,assignOrderWorker,planOrderTransfer,type HourTierRule,type WorkerAssignment,type CompletionRecord} from './feedback-rules';
 
-type Worker={id:string;name:string;team:string;capacity:number;overtime:number;skills:string[];active:boolean};
+export type Worker={id:string;name:string;team:string;capacity:number;overtime:number;skills:string[];active:boolean};
 export type Part={drawingNo?:string,id:string,code:string,name:string,category:string,unit:number,workers:string[],operationCode?:string,processMode?:'internal'|'external'};
-export type Order={mesOperationId?:string,mesOperationNo?:string,mesOrderHold?:string,outsourcingProgress?:OutsourcingProgress,processTaskId?:string,outsourcingParentId?:string,approvalExecutionId?:string,outsourcedQuantity?:number,workerAssignment?:WorkerAssignment,drawingNo?:string,manualCompletion?:CompletionRecord,id:string,orderNo:string,customer:string,partCode:string,name:string,qty:number,done:number,due:string,priority:number,status:string};
-export type Allocation={operation?:string,quantity?:number,planStatus?:string,machineId?:string,machineName?:string,orderId?:string,drawingNo?:string,date:string,worker:string,orderNo:string,partCode:string,name:string,amount:number,capacity:number,due:string,status:string,reason?:string,candidates?:string[],startTime?:string,endTime?:string};
-type ImportIssue={key:string,orderNo?:string,partCode:string,name:string,reason:string};
+export type Order={deliveryBatches?:DeliveryBatch[],outsourcingProgress?:OutsourcingProgress,processTaskId?:string,outsourcingParentId?:string,approvalExecutionId?:string,outsourcedQuantity?:number,workerAssignment?:WorkerAssignment,drawingNo?:string,manualCompletion?:CompletionRecord,mesOperationId?:string,mesOperationNo?:string,mesOrderHold?:string,id:string,orderNo:string,customer:string,partCode:string,name:string,qty:number,done:number,due:string,priority:number,status:string};
+export type Allocation={taskId?:string,operation?:string,quantity?:number,planStatus?:string,machineId?:string,machineName?:string,orderId?:string,drawingNo?:string,date:string,worker:string,orderNo:string,partCode:string,name:string,amount:number,capacity:number,due:string,status:string,reason?:string,candidates?:string[],startTime?:string,endTime?:string};
+export type ImportIssue={key:string,orderNo?:string,partCode:string,name:string,reason:string};
 type PlanStatus='草稿'|'已确认'|'已发布'|'已撤回'|'已变更';
 export type ScheduleShortage={orderId?:string;drawingNo?:string;orderNo:string;partCode:string;name:string;due:string;requiredWork:number;scheduledWork:number;remainingWork:number;remainingQty:number;suggestedWorker?:string;estimatedFinish?:string;reason:string};
 type ScheduleHistory={id:string;createdAt:string;label:string;allocations:Allocation[];status?:PlanStatus;confirmedBy?:string;publishedAt?:string;publishedBy?:string;withdrawnAt?:string;withdrawnBy?:string;changeNote?:string};
 type AuditEntry={id:string;actor:string;action:string;summary:string;createdAt:string;revision:number};
 type SkillEvidence={person:string,partCode:string,operation:string,count:number,lastAt:string,avgUnitTime:number};
 type ImportBatch={id:string,fileName:string,type:string,importedAt:string,rows:number,note:string};
-export type AppState={workers:Worker[],parts:Part[],orders:Order[],allocations:Allocation[],lastRun:string,issues?:ImportIssue[],importedAt?:string,history?:ScheduleHistory[],processTasks?:ProcessTask[],skillEvidence?:SkillEvidence[],importLog?:ImportBatch[],scheduleShortages?:ScheduleShortage[],hourTierRules?:HourTierRule[],planStatus?:PlanStatus,planSnapshotId?:string,planUpdatedAt?:string,planUpdatedBy?:string,planChangeNote?:string,workingWindows?:string,productionCalendar?:CalendarEntry[],machines?:Machine[],millingRules?:MillingRule[],millingPlan?:MillingPlan,millingReleases?:MillingRelease[],excelImportConflicts?:ExcelImportConflict[],mesOperationQuotas?:MesOperationQuota[],mesOrderSync?:{lastChangedAt:string},mesSync?:MesSyncState['mesSync']};
+export type AppState={progressTolerance?:number,workers:Worker[],parts:Part[],orders:Order[],allocations:Allocation[],lastRun:string,issues?:ImportIssue[],importedAt?:string,history?:ScheduleHistory[],processTasks?:ProcessTask[],skillEvidence?:SkillEvidence[],importLog?:ImportBatch[],scheduleShortages?:ScheduleShortage[],hourTierRules?:HourTierRule[],planStatus?:PlanStatus,planSnapshotId?:string,planUpdatedAt?:string,planUpdatedBy?:string,planChangeNote?:string,workingWindows?:string,productionCalendar?:CalendarEntry[],machines?:Machine[],millingRules?:MillingRule[],millingPlan?:MillingPlan,millingReleases?:MillingRelease[],excelImportConflicts?:ExcelImportConflict[],mesOperationQuotas?:MesOperationQuota[],mesOrderSync?:{lastChangedAt:string},mesSync?:MesSyncState['mesSync']};
 type Factory='xian'|'xingping';
 type SessionInfo={role:'main'|'factory';factory?:Factory;displayName:string};
 type FactorySummary={orders:number;workers:number;parts:number;allocations:number;lastRun:string};
@@ -93,6 +100,7 @@ const summaryOf=(state:AppState|null|undefined):FactorySummary=>({orders:state?.
 
 const formatLocalDate=(d:Date)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 const today=()=>formatLocalDate(new Date());
+const factoryDay=()=>new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai'}).format(new Date());
 const addDay=(s:string,n=1)=>{const [year,month,day]=s.split('-').map(Number);const d=new Date(year,month-1,day);d.setDate(d.getDate()+n);return formatLocalDate(d)};
 const clean=(value:unknown)=>String(value??'').trim();
 const excelDate=(value:unknown)=>{
@@ -106,8 +114,6 @@ const explainIssue=(reason:string)=>reason.replaceAll('无匹配人员','无人�
 const carOperation=(name:string)=>/车工|粗车|精车|数控车|车削/.test(name);
 const importEntry=(fileName:string,type:string,rows:number,note:string):ImportBatch=>({id:crypto.randomUUID(),fileName,type,rows,note,importedAt:new Date().toLocaleString('zh-CN')});
 const taskKey=(workOrderNo:string,operationNo:string)=>`${clean(workOrderNo)}|${clean(operationNo)}`;
-const isExternal=(part?:Part,order?:Order)=>part?.processMode==='external'||Boolean(order?.outsourcingParentId||order?.outsourcingProgress);
-const PLAN_DAYS=6;
 const priorityLabels=['紧急','交期必保','普通'];
 function withoutCurrentPlan(state:AppState):AppState{
  return {...state,allocations:[],excelImportConflicts:undefined,scheduleShortages:[],lastRun:'',planStatus:'草稿',planSnapshotId:undefined,planUpdatedAt:undefined,planUpdatedBy:undefined,planChangeNote:undefined};
@@ -169,102 +175,23 @@ const mergeConfirmedXianWorkers=(workers:Worker[]=[])=>{
 
 export const normalizeState=(state:AppState|null,factory:Factory)=>{const base=state||stateForFactory(factory);return{...base,parts:(base.parts||[]).map((p:Part)=>({...p,operationCode:p.operationCode||'TURN',processMode:p.processMode||'internal'})),workers:factory==='xingping'?mergeOfficialWorkers(base.workers||[]):mergeConfirmedXianWorkers(base.workers||[]),orders:base.orders||[],allocations:base.allocations||[],processTasks:base.processTasks||[],skillEvidence:base.skillEvidence||[],importLog:base.importLog||[],scheduleShortages:base.scheduleShortages||[],hourTierRules:base.hourTierRules||[],planStatus:base.planStatus||'草稿' as PlanStatus}};
 
-export function schedule(state:AppState,useOvertime=false,preserveExisting=false){
- const loads=new Map<string,number>(),out:Allocation[]=[],shortages:ScheduleShortage[]=[],blocked:ImportIssue[]=[];
- const reserved=[...(state.millingReleases||[]).flatMap(release=>release.rows),...(preserveExisting?state.allocations:[])];
- for(const row of reserved){
-  const worker=state.workers.find(item=>item.name===row.worker);
-  if(worker){const key=worker.id+'|'+row.date;loads.set(key,(loads.get(key)||0)+row.amount)}
- }
- const days=productionDays(today(),PLAN_DAYS,state.productionCalendar);
- const partFor=(order:Order)=>{
-  const part=state.parts.find(item=>item.code===order.partCode);
-  return state.mesOperationQuotas?.length?partWithMesOperationQuota(order,part,state.mesOperationQuotas):part;
- };
- const workOf=(o:Order)=>Math.max(0,o.qty-o.done)*(partFor(o)?.unit||0);
- const orders=state.orders.map(order=>releasedOrder(order,state.processTasks)).filter(o=>!orderIsComplete(o)&&!isExternal(partFor(o),o)&&(!(o.processTaskId||o.id.startsWith('mes-process-order|'))||o.qty>o.done)).sort((a,b)=>a.priority-b.priority||(a.due||'').localeCompare(b.due||'')||workOf(a)-workOf(b));
- for(const order of orders){
-  const part=partFor(order);
-  const {problems,ranked}=checkOrderForSchedule(order,part,state.workers,state.hourTierRules);
-  if(problems.length){blocked.push(toReviewIssue(order,problems));continue}
-  if(!part||!ranked)continue;
-  const requiredWork=(order.qty-order.done)*part.unit;
-  const equipment=state.machines?.filter(machine=>machine.partCodes.includes(part.code))||[];
-  // Explicitly selected workers are a hard constraint. Category skills are
-  // only a fallback for legacy parts that have no selected workers.
-   const candidates=ranked.workers;
-   let best:{w:Worker,finish:string,plan:({date:string,amount:number,capacity:number}&Partial<MachineSlot>)[],remaining:number,preferred:boolean,existingLoadRatio:number,finishRatio:number}|null=null;
-   for(const w of candidates){
-    let remain=requiredWork,finish=days.at(-1)||today();
-    const plan:({date:string;amount:number;capacity:number}&Partial<MachineSlot>)[]=[];
-    for(const date of days){
-     const capacity=capacityOn(w,date,state.productionCalendar,useOvertime,state.workingWindows);
-     const workerRemaining=Math.max(0,capacity-(loads.get(w.id+'|'+date)||0));
-     if(equipment.length){
-      const slots=jointMachineSlots({machines:equipment,partCode:part.code,worker:w,date,calendar:state.productionCalendar,windows:state.workingWindows,rows:[...reserved,...out],remaining:remain,workerRemaining, overtime:useOvertime});
-      plan.push(...slots.map(slot=>({...slot,date})));
-      remain-=slots.reduce((sum,slot)=>sum+slot.amount,0);
-      if(remain<=.001){finish=date;break}
-      continue;
-     }
-     if([...reserved,...out].some(row=>row.machineId&&row.worker===w.name&&row.date===date))continue;
-     const amount=Math.min(remain,workerRemaining);
-     if(amount<=0)continue;
-     plan.push({date,amount,capacity});
-     remain-=amount;
-     if(remain<=.001){finish=date;break}
-    }
-    const preferred=ranked.preferredIds.has(w.id),last=plan.at(-1);
-    const finishRatio=last?((loads.get(w.id+'|'+last.date)||0)+last.amount)/last.capacity:Number.POSITIVE_INFINITY;
-    const nominalCapacity=useOvertime?w.overtime:w.capacity;
-    const existingLoadRatio=[...loads.entries()].filter(([key])=>key.startsWith(w.id+'|')).reduce((sum,[,value])=>sum+value,0)/Math.max(1,nominalCapacity);
-    if(!best||remain<best.remaining||(remain===best.remaining&&((preferred&&!best.preferred)||(preferred===best.preferred&&(finish<best.finish||(finish===best.finish&&(finishRatio<best.finishRatio||(finishRatio===best.finishRatio&&existingLoadRatio<best.existingLoadRatio)))))))){
-     best={w,finish,plan,remaining:remain,preferred,existingLoadRatio,finishRatio};
-    }
-   }
-   if(!best)continue;const candidateNames=candidates.map(w=>w.name),matchBasis=order.workerAssignment?.workerId?'订单人工指定':part.workers.length?'工件指定人员':ranked.rule?(ranked.rule.mode==='exclusive'?'工时分档限定人员':best.preferred?'工时分档首选人员':'工时分档产能不足启用候补'):'按加工类别匹配',selection=candidates.length===1?'唯一可加工人员':'候选人中预计最早完成';for(const p of best.plan){const cap=p.capacity,k=best.w.id+'|'+p.date;loads.set(k,(loads.get(k)||0)+p.amount);out.push({...p,orderId:order.id,drawingNo:order.drawingNo?.trim()||part.drawingNo?.trim(),date:p.date,worker:best.w.name,orderNo:order.orderNo,partCode:order.partCode,name:order.name,amount:p.amount,capacity:cap,due:order.due.trim(),status:p.date<=order.due.trim()?'按期':'延期',reason:`${matchBasis}；${selection}${useOvertime?'；加班产能待主管批准':''}`,candidates:candidateNames})}if(best.remaining>.001){const estimated=equipment.length?undefined:estimateCalendarFinish(best.w,addDay(days.at(-1)||today()),best.remaining,state.productionCalendar,useOvertime,state.workingWindows);shortages.push({orderId:order.id,drawingNo:order.drawingNo||part?.drawingNo,orderNo:order.orderNo,partCode:order.partCode,name:order.name,due:order.due.trim(),requiredWork,scheduledWork:requiredWork-best.remaining,remainingWork:best.remaining,remainingQty:best.remaining/part.unit,suggestedWorker:best.w.name,estimatedFinish:estimated,reason:equipment.length?'六工作日内人员与设备共同可用产能不足，请核对设备、停机和工作时段':'六工作日计划窗口内产能不足'})}
- }
- return {allocations:out.sort((a,b)=>a.date.localeCompare(b.date)||a.worker.localeCompare(b.worker)),shortages,blocked};
-}
-
-function orderIsComplete(order:Order){
- return order.status==='已完成'||(order.qty>0&&order.done===order.qty);
-}
-function estimateCalendarFinish(worker:Worker,start:string,work:number,calendar:CalendarEntry[]|undefined,overtime:boolean,windows?:string){
- if(!(overtime?worker.overtime:worker.capacity))return undefined;
- let day=start;
- for(let i=0;i<3660;i++,day=addDay(day)){
-  work-=capacityOn(worker,day,calendar,overtime,windows);
-  if(work<=.001)return day;
- }
- return undefined;
-}
-
-function checkOrderForSchedule(order:Order,part:Part|undefined,workers:Worker[],rules:HourTierRule[]=[]){
- const problems=orderDataProblems(order,part);
- if(order.mesOrderHold)problems.unshift(order.mesOrderHold);
- const ranked=part?rankedOrderCandidates(order,part,workers,rules):undefined;
- if(part&&!ranked?.workers.length)problems.push('无可加工人员');
- return {problems,ranked};
-}
-function toReviewIssue(order:Order,problems:string[]):ImportIssue{
- return {key:order.id,orderNo:order.orderNo,partCode:order.partCode,name:order.name,reason:problems.join('；')};
-}
 function collectOrderIssues(state:Pick<AppState,'orders'|'parts'|'workers'|'hourTierRules'|'mesOperationQuotas'>):ImportIssue[]{
  const parts=new Map(state.parts.map(part=>[part.code,part]));
  return state.orders.flatMap(order=>{
   const base=parts.get(order.partCode);
   const part=state.mesOperationQuotas?.length?partWithMesOperationQuota(order,base,state.mesOperationQuotas):base;
-  if(order.mesOrderHold)return [toReviewIssue(order,[order.mesOrderHold])];
   if(orderIsComplete(order)||isExternal(part,order))return [];
   const {problems}=checkOrderForSchedule(order,part,state.workers,state.hourTierRules);
   return problems.length?[toReviewIssue(order,problems)]:[];
  });
 }
 
+export {schedule};
+
 export default function SchedulerApp(){
  const [orderSearch,setOrderSearch]=useState('');
  const [orderFilter,setOrderFilter]=useState<'all'|'pending'|'active'|'risk'|'complete'|'review'>('all');
+ const [millingCompletionRow,setMillingCompletionRow]=useState<Allocation|null>(null);
  const [excelPreview,setExcelPreview]=useState<{state:AppState;revision:number;factory:Factory;fileName:string;message:string;review:ReturnType<typeof reviewExcelImport>}|null>(null);
  const [newOrderOpen,setNewOrderOpen]=useState(false),[importing,setImporting]=useState(false),[resultDay,setResultDay]=useState('');
  const [batchGapsOpen,setBatchGapsOpen]=useState(false);
@@ -276,6 +203,7 @@ export default function SchedulerApp(){
  const [data,setData]=useState<AppState>(initial),[tab,setTab]=useState('看板'),[loading,setLoading]=useState(true),[authenticated,setAuthenticated]=useState(false),[authError,setAuthError]=useState(''),[notice,setNotice]=useState(''),[resultView,setResultView]=useState<'week'|'day'>('week');
  const [sessionInfo,setSessionInfo]=useState<SessionInfo|null>(null),[activeFactory,setActiveFactory]=useState<Factory>('xingping'),[factorySummaries,setFactorySummaries]=useState<Record<Factory,FactorySummary>>({xian:summaryOf(null),xingping:summaryOf(null)});
  const [stateRevision,setStateRevision]=useState(0),[auditLog,setAuditLog]=useState<AuditEntry[]>([]);
+ const [scenarioOrder,setScenarioOrder]=useState<{factory:Factory;id:string}|null>(null);
  const [inputDialog,setInputDialog]=useState<{title:string;value:string;type:'text'|'date'|'number';options?:string[]}|null>(null),inputResolver=useRef<((value:string|null)=>void)|null>(null);
  const [loginForm,setLoginForm]=useState({username:'',password:''});
  const [passwordDialog,setPasswordDialog]=useState(false),[passwordForm,setPasswordForm]=useState({currentPassword:'',newPassword:'',confirmPassword:''}),[passwordError,setPasswordError]=useState('');
@@ -305,7 +233,7 @@ export default function SchedulerApp(){
  async function changePassword(e:React.FormEvent){e.preventDefault();setPasswordError('');if(passwordForm.newPassword!==passwordForm.confirmPassword){setPasswordError('两次输入的新密码不一致');return}if(passwordForm.newPassword.length<8){setPasswordError('新密码至少需要8位');return}const r=await fetch('/api/auth/change-password',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({currentPassword:passwordForm.currentPassword,newPassword:passwordForm.newPassword})}),x=await r.json();if(!r.ok){setPasswordError(x.error||'密码修改失败');return}setPasswordDialog(false);setPasswordForm({currentPassword:'',newPassword:'',confirmPassword:''});alert('密码修改成功，请使用新密码重新登录');location.reload()}
  function ask(title:string,value='',type:'text'|'date'|'number'='text',options?:string[]){return new Promise<string|null>(resolve=>{inputResolver.current=resolve;setInputDialog({title,value,type,options})})}
  function closeAsk(value:string|null){inputResolver.current?.(value);inputResolver.current=null;setInputDialog(null)}
- async function persist(next:AppState,msg='已保存',action='更新数据'){pendingSaves.current++;setNotice(`${factoryName(activeFactory)}：正在保存…`);try{const r=await fetch(`/api/state?factory=${activeFactory}`,{method:'PUT',headers:{'content-type':'application/json','prefer':'return=minimal'},body:JSON.stringify({state:next,expectedRevision:stateRevision,action,summary:msg})}),result=await r.json();if(r.status===409){setNotice('检测到其他用户已更新数据，系统已刷新，请重新执行刚才的操作');await loadFactory(activeFactory);setTimeout(()=>setNotice(''),4200);return false}if(r.status===422&&typeof result.message==='string'){setNotice(result.message);return false}if(!r.ok||!result.ok)throw new Error(result.error||'save_failed');const saved=normalizeState(result.state||next,activeFactory);setData(saved);setStateRevision(result.revision||stateRevision+1);setAuditLog(result.audit||[]);setFactorySummaries(s=>({...s,[activeFactory]:summaryOf(saved)}));setNotice(`${factoryName(activeFactory)}：${msg}`);setTimeout(()=>setNotice(''),2600);return true}catch{setNotice('保存失败，数据未覆盖，请刷新后重试');setTimeout(()=>setNotice(''),4200);return false}finally{pendingSaves.current--}}
+ async function persist(next:AppState,msg='已保存',action='更新数据',millingCompletion?:MillingCompletion){pendingSaves.current++;setNotice(`${factoryName(activeFactory)}：正在保存…`);try{const r=await fetch(`/api/state?factory=${activeFactory}`,{method:'PUT',headers:{'content-type':'application/json','prefer':'return=minimal'},body:JSON.stringify({state:next,expectedRevision:stateRevision,action,summary:msg,millingCompletion})}),result=await r.json();if(r.status===409){setNotice('检测到其他用户已更新数据，系统已刷新，请重新执行刚才的操作');await loadFactory(activeFactory);setTimeout(()=>setNotice(''),4200);return false}if(r.status===422&&typeof result.message==='string'){setNotice(result.message);return false}if(!r.ok||!result.ok)throw new Error(result.error||'save_failed');const saved=normalizeState(result.state||next,activeFactory);setData(saved);setStateRevision(result.revision||stateRevision+1);setAuditLog(result.audit||[]);setFactorySummaries(s=>({...s,[activeFactory]:summaryOf(saved)}));setNotice(`${factoryName(activeFactory)}：${msg}`);setTimeout(()=>setNotice(''),2600);return true}catch{setNotice('保存失败，数据未覆盖，请刷新后重试');setTimeout(()=>setNotice(''),4200);return false}finally{pendingSaves.current--}}
  const metrics=useMemo(()=>{const pending=data.orders.filter(o=>o.status!=='已完成'&&!isExternal(data.parts.find(p=>p.code===o.partCode),o)),lateOrders=new Set(data.allocations.filter(a=>a.status==='延期').map(a=>a.orderNo));return{pending:pending.length,work:pending.reduce((s,o)=>{const p=data.parts.find(x=>x.code===o.partCode);return s+Math.max(0,o.qty-o.done)*(p?.unit||0)},0),late:lateOrders.size,util:data.allocations.length?Math.round(data.allocations.reduce((s,a)=>s+a.amount/a.capacity,0)/data.allocations.length*100):0}},[data]);
  const historicalPeople=useMemo(()=>[...new Set((data.skillEvidence||[]).map(e=>e.person).filter(Boolean))].sort(),[data.skillEvidence]);
  const processWarnings=useMemo(()=>{const out:{key:string,level:string,type:string,task:ProcessTask,reason:string}[]=[];for(const t of data.processTasks||[]){if(t.remainingQty<=0)continue;const p=data.parts.find(x=>x.code===t.partCode),days=remainingProductionDays(today(),t.due,data.productionCalendar);if(t.due&&(t.due<today()||days<=1))out.push({key:t.id+'-late',level:'红色',type:'预计延期',task:t,reason:`距交期不超过1个工作日，仍剩 ${t.remainingQty}`});else if(t.due&&days<=3)out.push({key:t.id+'-yellow',level:'黄色',type:'余量不足',task:t,reason:`距交期仅 ${days} 个工作日，需优先关注`});if(carOperation(t.operationName)&&(!p||!p.unit))out.push({key:t.id+'-time',level:'灰色',type:'资料缺失',task:t,reason:'缺少当前车工工序标准工时'});if(carOperation(t.operationName)&&(!p||!matchingWorkers(p,data.workers).length))out.push({key:t.id+'-worker',level:'灰色',type:'无人员匹配',task:t,reason:'未配置工件—人员关系，历史报工也未匹配到现有人员'});if(processRelease(t,data.processTasks||[])<=t.completedQty)out.push({key:t.id+'-wait',level:'黄色',type:'等待前序',task:t,reason:'前序完成或质检放行状态未明确，不进入正式排产'})}return out},[data.processTasks,data.parts,data.workers,data.productionCalendar]);
@@ -453,6 +381,12 @@ export default function SchedulerApp(){
   const millingPlan=generateMillingPlan(data,today(),stateRevision+1);
   return persist({...data,millingPlan},`已保存 ${millingPlan.rows.length} 条铣工试排安排`,'生成铣工试排');
  }
+ async function saveMillingCompletion(input:MillingCompletion){
+  if(pendingSaves.current||refreshInProgress.current)return false;
+  recordMillingCompletion(data,input,sessionInfo?.displayName||'计划员',new Date().toISOString(),'validation');
+  const label=input.batchId?'更正铣工完工':'登记铣工完工';
+  return persist(data,label+'成功',label,input);
+ }
  async function changeMillingStatus(publish:boolean){
   if(pendingSaves.current||refreshInProgress.current)return false;
   const plan=data.millingPlan;
@@ -461,6 +395,7 @@ export default function SchedulerApp(){
   const label=publish?'发布铣工派工':'确认铣工草稿';
   return persist(data,label+'成功',label);
  }
+
  async function refreshData(){
   if(pendingSaves.current||importing||refreshInProgress.current||loading)return;
   refreshInProgress.current=true;
@@ -709,7 +644,15 @@ export default function SchedulerApp(){
     return {...order,outsourcingProgress:previous.outsourcingProgress,done:previous.done,status:previous.status};
    });
    orders.push(...tracked.values());
-   const state={...next,parts,orders,issues:collectOrderIssues({...next,orders,parts})};
+   const recordedTasks=new Map(data.processTasks?.filter(task=>task.millingReports?.length).map(task=>[task.id,task]));
+   const processTasks=next.processTasks?.map(task=>{
+    const prior=recordedTasks.get(task.id);
+    if(!prior)return task;
+    if(task.plannedQty<prior.completedQty)throw Error(task.workOrderNo+' 铣工计划量小于已登记完工量；本次导入未保存。');
+    const remainingQty=task.plannedQty-prior.completedQty;
+    return {...task,completedQty:prior.completedQty,remainingQty,status:remainingQty===0?'已完成':prior.completedQty>0?'进行中':'待前序确认',lastReportAt:prior.lastReportAt};
+   });
+   const state={...next,parts,orders,processTasks,issues:collectOrderIssues({...next,orders,parts})};
    const review=reviewExcelImport(data,state);
    const manualCount=orders.filter(o=>o.manualCompletion).length;
    setExcelPreview({state:{...state,excelImportConflicts:review.openConflicts},revision:stateRevision,factory:activeFactory,fileName:file.name,review,message:message+(manualCount?'；保留 '+manualCount+' 项人工完工登记':'')});
@@ -806,7 +749,7 @@ export default function SchedulerApp(){
  if(loading)return <main className="miora-loading" role="status">正在加载序衡 APS…</main>;
  if(!authenticated || !sessionInfo)return <MioraLogin username={loginForm.username} password={loginForm.password} error={authError} onUsername={username=>setLoginForm(f=>({...f,username}))} onPassword={password=>setLoginForm(f=>({...f,password}))} onSubmit={login}/>;
  return <MioraShell page={tab} role={sessionInfo.role} factory={activeFactory} account={sessionInfo.displayName}
-  onNavigate={page=>{if(page==='生产审批')setApprovalKind('urgent');setTab(page)}} onSwitchFactory={switchFactory}
+  onNavigate={page=>{if(page==='生产审批')setApprovalKind('urgent');setScenarioOrder(null);setTab(page)}} onSwitchFactory={switchFactory}
   onPassword={()=>{setPasswordError('');setPasswordDialog(true)}} onLogout={logout}
   actions={<>
    <button className="import" type="button" onClick={()=>showGuide(0)}>使用引导</button>
@@ -857,8 +800,8 @@ export default function SchedulerApp(){
    {tab==='人员产能'&&<div className="split personnel-layout"><section className="panel personnel-panel"><div className="panel-title"><div><h3>车工人员与能力</h3><p className="panel-count">共 {data.workers.length} 名人员</p></div>{masterDataActions('workers')}</div>{masterDataImportError('workers')}<div className="table-wrap personnel-table-wrap"><table className="personnel-table"><thead><tr><th>人员</th><th>班组</th><th>日产能</th><th>适合加工</th><th>状态</th><th>操作</th></tr></thead><tbody>{data.workers.map(w=>{const skills=w.skills.join('、')||'根据历史报工整理';return <tr key={w.id}><td><b>{w.name}</b></td><td>{w.team}</td><td><b>{w.capacity||'待确认'}</b><small className="cell-note">加班 {w.overtime||'待确认'}</small></td><td><span className="skills-preview" title={skills}>{skills}</span></td><td><span className={w.active&&w.capacity>0?'ok':'pending'}>{w.active&&w.capacity>0?'已确认':'待确认'}</span></td><td><button type="button" className={w.active&&w.capacity>0?'import':'primary'} onClick={()=>editWorker(w)}>{w.active&&w.capacity>0?'修改':'补充'}</button></td></tr>})}</tbody></table></div></section><Form title={editingWorkerId?'修改并确认人员能力':'新增人员能力'} onSubmit={addWorker}><input placeholder="姓名（以Excel正式姓名为准）" value={workerForm.name} onChange={e=>setWorkerForm({...workerForm,name:e.target.value})}/><div className="row"><input type="number" min="0" placeholder="8小时标准日产能（必填）" value={workerForm.capacity} onChange={e=>setWorkerForm({...workerForm,capacity:e.target.value})}/><input type="number" min="0" placeholder="加班后标准日产能" value={workerForm.overtime} onChange={e=>setWorkerForm({...workerForm,overtime:e.target.value})}/></div><input placeholder="适合加工种类，用逗号分隔" value={workerForm.skills} onChange={e=>setWorkerForm({...workerForm,skills:e.target.value})}/>{editingWorkerId&&<button type="button" className="import" onClick={cancelWorkerEdit}>取消修改</button>}</Form></div>}
    {tab==='工件定额'&&<div className="split"><section className="panel"><div className="panel-title"><div><h3>工件能力配置</h3><p className="panel-count" role="status">{partSearch.trim()?`找到 ${visibleParts.length} 项，共 ${data.parts.length} 项`:`共 ${data.parts.length} 项工件定额`}</p></div>{masterDataActions('parts')}</div>{masterDataImportError('parts')}<div className="part-search"><span aria-hidden="true">⌕</span><input type="search" aria-label="搜索工件" placeholder="搜索物料编码、图号、名称或类别" value={partSearch} onChange={e=>setPartSearch(e.target.value)}/>{partSearch&&<button type="button" onClick={()=>setPartSearch('')}>清除</button>}</div><details className="data-details" open><summary>查看工件资料</summary><div className="table-wrap capped-table"><table><thead><tr><th>物料 / 图号</th><th>名称</th><th>方式</th><th>工时</th><th>指定人员</th><th>操作</th></tr></thead><tbody>{visibleParts.map(p=><tr key={p.id} className={editingPartCode===p.code?'order-row-selected':''}><td><b className="mono">{p.code}</b><small className="cell-note mono">{p.drawingNo||"未提供图号"}</small></td><td><b>{p.name}</b></td><td><span className={isExternal(p)?'pending':'ok'}>{isExternal(p)?'外协':'车工'}</span></td><td><b>{isExternal(p)?'—':p.unit}</b></td><td className="wrap-cell">{isExternal(p)?'不参与内部排产':p.workers.map(id=>data.workers.find(w=>w.id===id)?.name).filter(Boolean).join('、')||'按加工种类匹配'}</td><td><button type="button" className="import" onClick={()=>editPart(p)}>修改</button></td></tr>)}</tbody></table></div></details></section><Form id="part-edit-form" title={editingPartCode?`修改工件 · ${editingPartCode}`:'新增工件能力'} onSubmit={addPart}><input placeholder="物料编码（相同编码可更新）" value={partForm.code} readOnly={Boolean(editingPartCode)} onChange={e=>setPartForm({...partForm,code:e.target.value})}/><input placeholder="图号（原文件没有时可手动填写）" value={partForm.drawingNo} onChange={e=>setPartForm({...partForm,drawingNo:e.target.value})}/><input placeholder="工件名称" value={partForm.name} onChange={e=>setPartForm({...partForm,name:e.target.value})}/><input placeholder="加工类别" value={partForm.category} onChange={e=>setPartForm({...partForm,category:e.target.value})}/><div className="compact-note">加工工序由系统自动识别。</div><div className="row"><select value={partForm.processMode} onChange={e=>setPartForm({...partForm,processMode:e.target.value as 'internal'|'external'})}><option value="internal">内部加工</option><option value="external">外协加工</option></select><input type="number" step="0.01" min="0" placeholder="单件工时值" disabled={partForm.processMode==='external'} value={partForm.unit} onChange={e=>setPartForm({...partForm,unit:e.target.value})}/></div>{partForm.processMode==='internal'&&<><label>指定可加工人员（不指定则按加工种类匹配）</label><div className="checks">{data.workers.map(w=><label key={w.id}><input type="checkbox" checked={partForm.workers.includes(w.id)} onChange={e=>setPartForm({...partForm,workers:e.target.checked?[...partForm.workers,w.id]:partForm.workers.filter(x=>x!==w.id)})}/>{w.name}</label>)}</div></>}{editingPartCode&&<button type="button" className="import" onClick={cancelPartEdit}>取消修改</button>}</Form></div>}
   {tab==='工件定额'&&Boolean(data.mesOperationQuotas?.length)&&<details className="panel" open><summary>已核对的 MES 工序定额（{data.mesOperationQuotas?.length} 项）</summary><div className="table-wrap capped-table"><table aria-label="MES 工序定额"><thead><tr><th>工单 / 工序</th><th>物料 / 图号</th><th>单件标准工作量</th><th>核对记录</th></tr></thead><tbody>{data.mesOperationQuotas?.map(quota=><tr key={quota.operationId}><td>{quota.workOrder} · {quota.operationNo}</td><td>{quota.partCode} · {quota.drawingNo}</td><td>{quota.unit}</td><td>{quota.evidence||'MES 报工校核'}</td></tr>)}</tbody></table></div></details>}
-   {tab==='订单管理'&&<div className="compact-page">
-   {typeof window!=='undefined'&&(window.location.hostname==='xuheng-aps.com'||window.location.origin==='http://127.0.0.1:3284')&&<MesCatalogPanel key={activeFactory} factory={activeFactory} mode="orders"/>}
+  {tab==='订单管理'&&<div className="compact-page">
+   {typeof window!=='undefined'&&(window.location.hostname==='xuheng-aps.com'||window.location.hostname==='www.xuheng-aps.com'||window.location.hostname==='127.0.0.1')&&<MesCatalogPanel key={activeFactory} factory={activeFactory} mode="orders"/>}
    <section className="panel">
      <div className="panel-title"><div><small>集中管理生产订单</small><h3>订单管理工作台</h3>{data.importedAt&&<small>最近一次周数据更新：{data.importedAt}</small>}</div>{reviewIssues.length?<span className="late">{reviewIssues.length} 项待确认</span>:<span className="ok">数据已就绪</span>}</div>
     <div className="schedule-edit-hint"><b>工时分档：</b>{data.hourTierRules?.length?`当前已启用 ${data.hourTierRules.length} 条可配置规则，下次生成排产时生效。`:'当前未启用工时分档，系统按人员技能、产能和交期正常匹配。'} <button type="button" onClick={()=>setTab('业务规则')}>维护规则</button></div>
@@ -879,14 +822,17 @@ export default function SchedulerApp(){
      <div style={{display:'flex',gap:8}}><button type="submit" className="primary">保存、确认并重排</button><button type="button" className="import" onClick={()=>setResolving(null)}>取消</button></div>
     </form></div>}
       <div className="table-wrap order-table-wrap"><table className="orders-compact-table"><thead><tr><th className="order-select-cell"><input aria-label="选择当前筛选结果中的全部可操作订单" type="checkbox" checked={allVisibleSelected} disabled={!selectableOrders.length} onChange={e=>toggleVisibleOrders(e.target.checked)}/></th><th>优先级</th><th>订单 / 客户</th><th>工件 / 图号</th><th>数量</th><th>人员</th><th>交期 / 状态</th><th>操作</th></tr></thead>
-       <tbody>{visibleOrders.map(o=>{const issue=issuesByOrder.get(o.id),part=data.parts.find(p=>p.code===o.partCode),external=isExternal(part,o),selectable=!o.mesOrderHold&&!external&&o.status!=='已完成'&&o.done<o.qty,capacityLate=data.allocations.some(a=>a.orderNo===o.orderNo&&a.status==='延期');return <tr key={o.id} className={selectedOrderIds.includes(o.id)?'order-row-selected':''}><td className="order-select-cell"><input aria-label={`选择订单 ${o.orderNo}`} type="checkbox" disabled={!selectable} checked={selectedOrderIds.includes(o.id)} onChange={e=>setSelectedOrderIds(ids=>e.target.checked?[...ids,o.id]:ids.filter(id=>id!==o.id))}/></td><td>{selectable?<button type="button" className={`priority p${o.priority}`} aria-label="设置优先级" onClick={()=>changePriority(o)}>{priorityLabels[o.priority-1]||'普通'}</button>:<span className={`priority p${o.priority}`}>{priorityLabels[o.priority-1]||'普通'}</span>}</td><td><b className="mono">{o.orderNo}</b>{o.mesOperationId&&<small className="cell-note">MES · 工序 {o.mesOperationNo}</small>}<small className="cell-note">{o.customer||'未填写客户'}</small></td><td><b>{o.name}</b><small className="cell-note mono">{o.partCode} · {drawingFor(o)||"未提供图号"}</small></td><td><b>{o.done}/{o.qty}</b><small className="cell-note">剩余 {Math.max(0,o.qty-o.done)} · {completionStatus(o)}</small></td><td>{o.workerAssignment?.workerId?(data.workers.find(w=>w.id===o.workerAssignment?.workerId)?.name||'人员已失效'):'自动匹配'}</td><td><b>{o.due}</b><small className="cell-note">{o.status==='已完成'?<span className="ok">已完工</span>:external?<span className="pending">外协任务</span>:issue?<span className="late" title={explainIssue(issue.reason)}>资料待确认</span>:capacityLate?<span className="late">预计延期</span>:<span className="pending">{o.status}</span>}</small>{issue&&<small className="cell-note">{explainIssue(issue.reason)}</small>}</td><td><div className="row-actions">{selectable&&<button type="button" className="import" onClick={()=>beginAssignment(o)}>指定人员</button>}{!o.mesOrderHold&&(issue||!orderIsComplete(o))&&<button className={issue?'late':'ok'} style={{border:0,cursor:'pointer'}} onClick={()=>issue?startResolve(o):confirmOrder(o)}>{issue?'补充资料':external?'不纳入本版':'确认重排'}</button>}{!external&&!o.mesOperationId&&<button type="button" className="import" onClick={()=>beginCompletion(o)}>{o.manualCompletion?'更正完工':'登记完工'}</button>}</div></td></tr>})}</tbody>
+       <tbody>{visibleOrders.map(o=>{const issue=issuesByOrder.get(o.id),part=data.parts.find(p=>p.code===o.partCode),external=isExternal(part,o),selectable=!o.mesOrderHold&&!external&&o.status!=='已完成'&&o.done<o.qty,capacityLate=data.allocations.some(a=>a.orderNo===o.orderNo&&a.status==='延期');return <tr key={o.id} className={selectedOrderIds.includes(o.id)?'order-row-selected':''}><td className="order-select-cell"><input aria-label={`选择订单 ${o.orderNo}`} type="checkbox" disabled={!selectable} checked={selectedOrderIds.includes(o.id)} onChange={e=>setSelectedOrderIds(ids=>e.target.checked?[...ids,o.id]:ids.filter(id=>id!==o.id))}/></td><td>{selectable?<button type="button" className={`priority p${o.priority}`} aria-label="设置优先级" onClick={()=>changePriority(o)}>{priorityLabels[o.priority-1]||'普通'}</button>:<span className={`priority p${o.priority}`}>{priorityLabels[o.priority-1]||'普通'}</span>}</td><td><b className="mono">{o.orderNo}</b>{o.mesOperationId&&<small className="cell-note">MES · 工序 {o.mesOperationNo}</small>}<small className="cell-note">{o.customer||'未填写客户'}</small></td><td><b>{o.name}</b><small className="cell-note mono">{o.partCode} · {drawingFor(o)||"未提供图号"}</small></td><td><b>{o.done}/{o.qty}</b><small className="cell-note">剩余 {Math.max(0,o.qty-o.done)} · {completionStatus(o)}</small>{!!o.deliveryBatches?.length&&<details className="cell-note"><summary>交付批次</summary><ul>{o.deliveryBatches.map(batch=><li key={batch.label}>{batch.label} · {batch.quantity} 件 · {batch.due}</li>)}</ul></details>}</td><td>{o.workerAssignment?.workerId?(data.workers.find(w=>w.id===o.workerAssignment?.workerId)?.name||'人员已失效'):'自动匹配'}</td><td><b>{o.due}</b><small className="cell-note">{o.status==='已完成'?<span className="ok">已完工</span>:external?<span className="pending">外协任务</span>:issue?<span className="late" title={explainIssue(issue.reason)}>资料待确认</span>:capacityLate?<span className="late">预计延期</span>:<span className="pending">{o.status}</span>}</small>{issue&&<small className="cell-note">{explainIssue(issue.reason)}</small>}</td><td><div className="row-actions">{selectable&&<button type="button" className="import" onClick={()=>beginAssignment(o)}>指定人员</button>}{!o.mesOrderHold&&(issue||!orderIsComplete(o))&&<button className={issue?'late':'ok'} style={{border:0,cursor:'pointer'}} onClick={()=>issue?startResolve(o):confirmOrder(o)}>{issue?'补充资料':external?'不纳入本版':'确认重排'}</button>}{!external&&!o.mesOperationId&&!o.mesOrderHold&&<button type="button" className="import" onClick={()=>beginCompletion(o)}>{o.manualCompletion?'更正完工':'登记完工'}</button>}</div></td></tr>})}</tbody>
      </table></div>
    </section>
    {newOrderOpen&&<div className="dialog-backdrop" role="dialog" aria-modal="true" aria-label="新增订单"><form onSubmit={addOrder}><h3>新增订单</h3><input placeholder="订单号" value={orderForm.orderNo} onChange={e=>setOrderForm({...orderForm,orderNo:e.target.value})}/><input placeholder="客户" value={orderForm.customer} onChange={e=>setOrderForm({...orderForm,customer:e.target.value})}/><select value={orderForm.partCode} onChange={e=>setOrderForm({...orderForm,partCode:e.target.value})}><option value="">选择工件</option>{data.parts.map(p=><option key={p.id} value={p.code}>{p.code} · {p.name}{p.drawingNo?` · 图号 ${p.drawingNo}`:''}</option>)}</select><div className="row"><input type="number" placeholder="数量" value={orderForm.qty} onChange={e=>setOrderForm({...orderForm,qty:e.target.value})}/><select value={orderForm.priority} onChange={e=>setOrderForm({...orderForm,priority:e.target.value})}><option value="1">紧急</option><option value="2">交期必保</option><option value="3">普通</option></select></div><label>要求完成日期</label><input type="date" value={orderForm.due} onChange={e=>setOrderForm({...orderForm,due:e.target.value})}/>{newOrderError&&<p className="miora-error" role="alert">{newOrderError}</p>}<div className="dialog-actions"><button className="import" type="button" onClick={()=>setNewOrderOpen(false)}>取消</button><button className="primary" type="submit">保存订单</button></div></form></div>}
   </div>}
   {tab==='外协任务池'&&<OutsourcingProgressPanel key={activeFactory} orders={data.orders.filter(order=>isExternal(data.parts.find(part=>part.code===order.partCode),order))} onSave={saveOutsourcingProgress}/>}
+  {tab==='预警中心'&&<DispatchProgressPanel key={activeFactory} state={data} factory={activeFactory} onTolerance={progressTolerance=>persist({...data,progressTolerance},'进度容差已保存','设置进度容差')} onScenario={id=>{setScenarioOrder({factory:activeFactory,id});setTab('情景试算')}}/>}
+  {tab==='预警中心'&&<ApsMetricsPanel key={'metrics-'+activeFactory} factory={activeFactory}/>}
+  {tab==='情景试算'&&<SchedulingScenarioPanel key={activeFactory} state={data} factory={activeFactory} revision={stateRevision} day={factoryDay()} initialOrderId={scenarioOrder?.factory===activeFactory?scenarioOrder.id:undefined} onPlanChange={()=>loadFactory(activeFactory)}/>}
   {tab==='排产结果'&&<>
-   {typeof window!=='undefined'&&(window.location.hostname==='xuheng-aps.com'||window.location.origin==='http://127.0.0.1:3284')&&<MesCatalogPanel key={activeFactory} factory={activeFactory} mode="draft" onPublished={refreshData}/>}
+   {typeof window!=='undefined'&&(window.location.hostname==='xuheng-aps.com'||window.location.hostname==='www.xuheng-aps.com'||window.location.hostname==='127.0.0.1')&&<MesCatalogPanel key={activeFactory} factory={activeFactory} mode="draft" onPublished={refreshData}/>}
    {!!data.excelImportConflicts?.length&&<details className="panel" open><summary>Excel 导入后待核对的派工（{data.excelImportConflicts.length} 项）</summary><ul>{data.excelImportConflicts.map(issue=><li key={issue.key}>{issue.orderNo} · {issue.partCode}：{issue.reason}</li>)}</ul></details>}
    {equipmentConflicts.length>0&&<p className="import-issues" role="status">有 {equipmentConflicts.length} 条已有派工与设备约束冲突，请人工核对。</p>}
    {qualityConflicts.length>0&&<p className="import-issues" role="status">有 {qualityConflicts.length} 项工序的现有派工超出质检放行量，请人工核对。{qualityConflicts.slice(0,3).map(order=>order.orderNo+' / '+order.name).join('、')}</p>}
@@ -899,13 +845,18 @@ export default function SchedulerApp(){
    <MioraPlan rows={resultView==='day'?dailyRows:dispatchRows} dates={planDates} view={resultView} day={resultDay} status={data.planStatus||'草稿'}
     updated={data.planUpdatedBy?`${data.planUpdatedBy} · ${data.planUpdatedAt||''}`:data.lastRun} changeNote={data.planChangeNote}
     shortages={eligibleShortfalls} issues={reviewIssues} onView={setResultView} onDay={setResultDay} onIssues={openOrderReview} onExportDay={exportDailyDispatch}
-    onEdit={editAllocation} onAssign={changeAllocationWorker} onComplete={completeAllocation} onBatch={()=>setBatchGapsOpen(true)} onSlot={changeDispatchSlot}
-    progress={row=>{const order=data.orders.find(o=>allocationBelongsTo(row,o,data.orders));return order?`完工 ${order.done}/${order.qty}`:'请在订单管理核对'}}/>
+    onEdit={editAllocation} onAssign={changeAllocationWorker} onComplete={row=>row.operation==='铣工'?setMillingCompletionRow(row):completeAllocation(row)} onBatch={()=>setBatchGapsOpen(true)} onSlot={changeDispatchSlot}
+    progress={row=>{if(row.operation==='铣工'){
+     const task=data.processTasks?.find(item=>item.id===row.taskId);
+     const completed=millingBatches(task,millingDispatchKey(row)).reduce((sum,batch)=>sum+batch.quantity,0);
+     return '完工 '+completed+' / '+row.quantity+' 件';
+    }const order=data.orders.find(o=>allocationBelongsTo(row,o,data.orders));return order?`完工 ${order.done}/${order.qty}`:'请在订单管理核对'}}/>
    <WorkerLoadAnalysis workers={data.workers} parts={data.parts} orders={data.orders} rows={eligibleRows} calendar={data.productionCalendar} windows={data.workingWindows}/>
    {batchGapsOpen&&<MioraGapDialog key={`${activeFactory}:${stateRevision}`} state={data} rows={eligibleShortfalls} earliestDate={today()} onClose={()=>setBatchGapsOpen(false)} onApply={applyBatchGaps}/>}
   </>}
    {tab==='历史记录'&&<div className="compact-page"><section className="panel"><div className="panel-title"><div><small>已确认计划快照</small><h3>周计划历史记录</h3></div></div>{data.history?.length?<div style={{display:'grid',gap:12}}>{data.history.map(h=><details key={h.id} style={{border:'1px solid var(--rule)',padding:14}}><summary style={{cursor:'pointer',fontWeight:800}}>{h.label}<span className={h.status==='已发布'?'ok':h.status==='已撤回'?'late':'pending'} style={{marginLeft:12}}>{h.status||'已确认'}</span><span style={{marginLeft:12,color:'var(--muted)',fontSize:11}}>{h.allocations.length}条派工记录</span></summary><div style={{display:'flex',gap:8,margin:'12px 0'}}>{(h.status||'已确认')==='已确认'&&<button className="primary" onClick={()=>changeHistoryStatus(h,'已发布')}>发布执行</button>}{h.status==='已发布'&&<button className="import" style={{color:'#a8322b'}} onClick={()=>changeHistoryStatus(h,'已撤回')}>撤回计划</button>}{h.changeNote&&<span className="late">原因：{h.changeNote}</span>}</div><HistorySchedule rows={h.allocations}/></details>)}</div>:<div className="empty"><b>暂无历史记录</b><span>在排产结果中点击“确认本周计划”后保存。</span></div>}</section><details className="panel compact-section"><summary className="compact-summary"><span><b>操作日志</b><small>用于追溯操作，可按需展开</small></span><em>{auditLog.length} 条</em></summary><div className="table-wrap capped-table"><table><thead><tr><th>时间</th><th>操作人</th><th>动作</th><th>说明</th><th>版本</th></tr></thead><tbody>{auditLog.slice(0,100).map(x=><tr key={x.id}><td>{new Date(x.createdAt).toLocaleString('zh-CN')}</td><td><b>{x.actor}</b></td><td>{x.action}</td><td>{x.summary}</td><td>v{x.revision}</td></tr>)}</tbody></table></div></details></div>}
    {guideStep!==null&&<div className="guide-backdrop" role="dialog" aria-modal="true" aria-label="新版使用引导"><section className="guide-card"><div className="guide-progress"><span>使用引导</span><b>{guideStep+1}/{guideSteps.length}</b></div><div className="guide-dots" aria-hidden="true">{guideSteps.map((_,i)=><i key={i} className={i<=guideStep?'active':''}/>)}</div><small>{guideSteps[guideStep].tab}</small><h2>{guideSteps[guideStep].title}</h2><p>{guideSteps[guideStep].body}</p><div className="guide-tip"><b>操作提示</b><span>{guideSteps[guideStep].tip}</span></div><div className="guide-actions"><button type="button" className="guide-skip" onClick={closeGuide}>跳过，以后再看</button>{guideStep>0&&<button type="button" className="import" onClick={()=>showGuide(guideStep-1)}>上一步</button>}<button type="button" className="primary" onClick={nextGuide}>{guideStep===guideSteps.length-1?'完成引导':'下一步'}</button></div></section></div>}
+   {millingCompletionRow&&<MillingCompletionDialog row={millingCompletionRow} task={data.processTasks?.find(item=>item.id===millingCompletionRow.taskId)} onClose={()=>setMillingCompletionRow(null)} onSave={saveMillingCompletion}/>}
    {excelPreview&&<ExcelImportPreview fileName={excelPreview.fileName} factory={factoryName(excelPreview.factory)} note={excelPreview.state.importLog?.[0]?.note} review={excelPreview.review} saving={importing} onConfirm={confirmExcelImport} onCancel={()=>setExcelPreview(null)}/>}
   {bulkAssigning&&<div className="dialog-backdrop" role="dialog" aria-modal="true" aria-label="批量指定加工人员"><form className="password-dialog" onSubmit={saveBulkAssignment}><div><small>批量操作</small><h3>为 {selectedOrderIds.length} 张订单指定加工人员</h3></div><p>保存后会写入订单数据并在刷新后保留；当前排产不变，下次点击“生成车工排产”时统一生效。</p><label>指定员工<select value={bulkAssignmentForm.workerId} onChange={e=>setBulkAssignmentForm({...bulkAssignmentForm,workerId:e.target.value})}><option value="">恢复自动匹配</option>{data.workers.filter(w=>w.active).map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select></label><label>修改原因（必填）<input value={bulkAssignmentForm.reason} onChange={e=>setBulkAssignmentForm({...bulkAssignmentForm,reason:e.target.value})} placeholder="例如：同批工件统一由该员工加工"/></label>{bulkAssignmentError&&<span role="alert" className="late">{bulkAssignmentError}</span>}<div className="dialog-actions"><button type="button" className="import" disabled={bulkAssignmentSaving} onClick={()=>setBulkAssigning(false)}>取消</button><button type="submit" className="primary" disabled={bulkAssignmentSaving}>{bulkAssignmentSaving?'正在保存…':'确认批量保存'}</button></div></form></div>}
   {assigning&&<div role="dialog" aria-modal="true" aria-label="指定加工人员" className="dialog-backdrop"><form onSubmit={saveAssignment} style={{maxHeight:'90dvh',overflowY:'auto',background:'#fff',borderRadius:16,padding:24,display:'grid',gap:14,width:'min(580px,96vw)'}}>
